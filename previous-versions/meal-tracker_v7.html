@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Meal Tracker</title>
+
+  <!-- PWA meta tags -->
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="theme-color" content="#16a34a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+
+  <!-- Scripts -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            kitchen: {
+              50: '#faf9f6', 100: '#f0ede6', 200: '#e2ddd2', 300: '#c9c1b0',
+              400: '#aea38c', 500: '#968a70', 600: '#7d7260', 700: '#635b4d',
+              800: '#524c42', 900: '#474239',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body {
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
+    }
+    html { overscroll-behavior: none; }
+    button, nav { -webkit-user-select: none; user-select: none; }
+    .animate-in { animation: fadeIn 0.3s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+    .modal-overlay { animation: modalIn 0.2s ease-out; }
+    @keyframes modalIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+  </style>
+</head>
+<body class="bg-kitchen-50 text-gray-800">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useReducer, useCallback, useMemo, useRef } = React;
+
+    // ==========================================================================
+    // CONSTANTS & HELPERS
+    // ==========================================================================
+
+    const generateId = () => {
+      try { return crypto.randomUUID(); } 
+      catch (e) { return Math.random().toString(36).substring(2, 15); }
+    };
+
+    const CATEGORIES = [
+      { id: 'carb',    label: 'Carb',    color: 'bg-amber-100 text-amber-800 border-amber-300' },
+      { id: 'protein', label: 'Protein', color: 'bg-red-100 text-red-800 border-red-300' },
+      { id: 'fruit',   label: 'Fruit',   color: 'bg-purple-100 text-purple-800 border-purple-300' },
+      { id: 'veggie',  label: 'Veggie',  color: 'bg-green-100 text-green-800 border-green-300' },
+      { id: 'snack',   label: 'Snack',   color: 'bg-blue-100 text-blue-800 border-blue-300' },
+    ];
+
+    const BALANCE_CATEGORIES = ['carb', 'protein', 'fruit', 'veggie'];
+
+    const STOCK_OPTIONS = [
+      { id: 'in',  label: 'In Stock', icon: '🟢', color: 'bg-green-50 border-green-300 text-green-700' },
+      { id: 'low', label: 'Low',      icon: '🟡', color: 'bg-yellow-50 border-yellow-300 text-yellow-700' },
+      { id: 'out', label: 'Out',      icon: '🔴', color: 'bg-red-50 border-red-300 text-red-700' },
+    ];
+
+    const RATINGS = [
+      { id: 'loves',    emoji: '😍', label: 'Loves' },
+      { id: 'likes',    emoji: '😊', label: 'Likes' },
+      { id: 'neutral',  emoji: '😐', label: 'Neutral' },
+      { id: 'dislikes', emoji: '😣', label: 'Dislikes' },
+    ];
+
+    const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
+    const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+    const STORAGE_KEYS = {
+      foods: 'mealTracker_foods',
+      plans: 'mealTracker_plans',
+      foodMemory: 'mealTracker_foodMemory',
+      combos: 'mealTracker_combos'
+    };
+
+    // --- Date Helpers ---
+    function today() { return new Date().toISOString().split('T')[0]; }
+    function formatDate(date) { return date.toISOString().split('T')[0]; }
+    function formatDateShort(dateStr) {
+      const d = new Date(dateStr + 'T00:00:00');
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+    function getMonday(date) {
+      const d = new Date(date);
+      const day = d.getDay();
+      const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+      d.setDate(diff);
+      d.setHours(0, 0, 0, 0);
+      return d;
+    }
+    function getWeekDates(monday) {
+      return Array.from({length: 7}, (_, i) => {
+        const d = new Date(monday);
+        d.setDate(d.getDate() + i);
+        return formatDate(d);
+      });
+    }
+
+    // --- Storage Helpers ---
+    function loadFromStorage(key, defaultValue) {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : defaultValue;
+    }
+    function saveToStorage(key, data) { localStorage.setItem(key, JSON.stringify(data)); }
+    function debounce(fn, delay) {
+      let timer;
+      return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); };
+    }
+
+    // ==========================================================================
+    // STATE REDUCER
+    // ==========================================================================
+
+    function appReducer(state, action) {
+      switch (action.type) {
+        case 'ADD_FOOD': {
+          const newFood = { id: generateId(), name: action.name, categories: action.categories || [], stock: 'in', rating: null, notes: '', lastTried: null, createdAt: today() };
+          return { ...state, foods: [...state.foods, newFood] };
+        }
+        case 'UPDATE_FOOD': {
+          const updatedFoods = state.foods.map(f => f.id === action.id ? { ...f, ...action.updates } : f);
+          return { ...state, foods: updatedFoods };
+        }
+        case 'DELETE_FOOD':
+          return { ...state, foods: state.foods.filter(f => f.id !== action.id) };
+        
+        case 'TOGGLE_FOOD_IN_MEAL': {
+          const existing = state.plans.find(p => p.date === action.date && p.meal === action.meal);
+          const foodId = action.foodId;
+          const isSelected = existing?.foodIds.includes(foodId);
+
+          if (!isSelected) {
+            // Add Logic
+            const updatedFoods = state.foods.map(f => f.id === foodId ? { ...f, lastTried: action.date } : f);
+            if (existing) {
+              return { ...state, foods: updatedFoods, plans: state.plans.map(p => p.id === existing.id ? { ...p, foodIds: [...p.foodIds, foodId] } : p) };
+            }
+            return { ...state, foods: updatedFoods, plans: [...state.plans, { id: generateId(), date: action.date, meal: action.meal, foodIds: [foodId] }] };
+          } else {
+            // Remove Logic
+            return { ...state, plans: state.plans.map(p => (p.date === action.date && p.meal === action.meal) ? { ...p, foodIds: p.foodIds.filter(id => id !== foodId) } : p).filter(p => p.foodIds.length > 0) };
+          }
+        }
+
+        case 'SAVE_COMBO':
+          return { ...state, combos: [...state.combos, { id: generateId(), name: action.name, foodIds: action.foodIds }] };
+        
+        case 'DELETE_COMBO':
+          return { ...state, combos: state.combos.filter(c => c.id !== action.id) };
+
+        case 'APPLY_COMBO': {
+          let tempState = state;
+          action.foodIds.forEach(fid => {
+            tempState = appReducer(tempState, { type: 'TOGGLE_FOOD_IN_MEAL', date: action.date, meal: action.meal, foodId: fid });
+          });
+          return tempState;
+        }
+
+        case 'IMPORT_DATA':
+          return { ...state, foods: action.foods, plans: action.plans || [], combos: action.combos || [] };
+
+        default: return state;
+      }
+    }
+
+    // ==========================================================================
+    // REUSABLE UI
+    // ==========================================================================
+
+    const Modal = ({ children, onClose }) => (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={(e) => e.target === e.currentTarget && onClose()}>
+        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto modal-overlay">{children}</div>
+      </div>
+    );
+
+    const StockIndicator = ({ stock, compact }) => {
+      const opt = STOCK_OPTIONS.find(o => o.id === stock) || STOCK_OPTIONS[0];
+      return compact ? <span>{opt.icon}</span> : <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${opt.color}`}>{opt.icon} {opt.label}</span>;
+    };
+
+    const RatingDisplay = ({ rating, compact }) => {
+      const r = RATINGS.find(rt => rt.id === rating);
+      if (!r) return null;
+      return compact ? <span>{r.emoji}</span> : <span className="text-sm">{r.emoji} {r.label}</span>;
+    };
+
+    const CategoryBadge = ({ categoryId, small }) => {
+      const cat = CATEGORIES.find(c => c.id === categoryId);
+      if (!cat) return null;
+      return <span className={`border rounded-full font-bold ${cat.color} ${small ? 'text-[9px] px-1' : 'text-xs px-2 py-0.5'}`}>{cat.label}</span>;
+    };
+
+    const BalanceIndicator = ({ foodIds, foods }) => {
+      const covered = new Set();
+      foodIds.forEach(fid => foods.find(f => f.id === fid)?.categories.forEach(c => covered.add(c)));
+      return (
+        <div className="flex gap-0.5">
+          {BALANCE_CATEGORIES.map(c => (
+            <span key={c} className={`text-[9px] px-1 rounded font-black ${covered.has(c) ? 'bg-green-100 text-green-700' : 'bg-red-50 text-red-300'}`}>
+              {c[0].toUpperCase()}{covered.has(c) ? '✓' : '✗'}
+            </span>
+          ))}
+        </div>
+      );
+    };
+
+    // ==========================================================================
+    // VIEW COMPONENTS
+    // ==========================================================================
+
+    function ShoppingListView({ foods, plans, dispatch }) {
+      const weekDates = getWeekDates(getMonday(today()));
+      const plannedIds = new Set();
+      plans.filter(p => weekDates.includes(p.date)).forEach(p => p.foodIds.forEach(id => plannedIds.add(id)));
+      
+      const list = foods.filter(f => (plannedIds.has(f.id) && f.stock !== 'in') || (f.stock === 'low' || f.stock === 'out'));
+
+      return (
+        <div className="animate-in">
+          <h2 className="text-xl font-black mb-4">🛒 Shopping List</h2>
+          {list.length === 0 ? <p className="text-center py-10 text-gray-400">Pantry is full! 🎉</p> : (
+            <div className="space-y-2">
+              {list.map(f => (
+                <div key={f.id} className="bg-white p-4 rounded-2xl border flex justify-between items-center shadow-sm">
+                  <div>
+                    <p className="font-bold">{f.name}</p>
+                    <div className="flex gap-2 mt-1">
+                      <StockIndicator stock={f.stock} compact />
+                      {plannedIds.has(f.id) && <span className="text-[10px] bg-blue-100 text-blue-700 px-1 rounded font-bold uppercase">Required for Plan</span>}
+                    </div>
+                  </div>
+                  <button onClick={() => dispatch({type: 'UPDATE_FOOD', id: f.id, updates: {stock: 'in'}})} className="bg-green-600 text-white px-4 py-2 rounded-xl text-xs font-bold active:scale-95">Got It</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function PantryView({ foods, dispatch }) {
+      const [editing, setEditing] = useState(null);
+      const [search, setSearch] = useState('');
+
+      const nudges = useMemo(() => {
+        const EIGHT_WEEKS = 8 * 7 * 24 * 60 * 60 * 1000;
+        return foods.filter(f => (f.rating === 'dislikes' || !f.rating) && f.lastTried && (new Date() - new Date(f.lastTried + 'T00:00:00')) > EIGHT_WEEKS);
+      }, [foods]);
+
+      const filteredFoods = foods.filter(f => f.name.toLowerCase().includes(search.toLowerCase()))
+        .sort((a,b) => a.name.localeCompare(b.name));
+
+      return (
+        <div className="animate-in pb-24">
+          {nudges.length > 0 && (
+            <div className="mb-6 overflow-x-auto flex gap-3 pb-2 no-scrollbar">
+              {nudges.slice(0,5).map(f => (
+                <div key={f.id} onClick={() => setEditing(f)} className="min-w-[200px] bg-amber-50 border border-amber-200 p-4 rounded-2xl shadow-sm">
+                  <p className="text-[10px] font-black uppercase text-amber-800 tracking-wider mb-1">💡 Try Again?</p>
+                  <p className="text-sm font-black text-gray-900">{f.name}</p>
+                  <p className="text-[10px] text-amber-600 font-bold mt-1">Last tried {formatDateShort(f.lastTried)}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <input 
+            type="text" 
+            placeholder="Search pantry..." 
+            value={search} 
+            onChange={e => setSearch(e.target.value)} 
+            className="w-full p-4 rounded-2xl border mb-4 bg-white shadow-sm focus:ring-2 focus:ring-green-500 outline-none"
+          />
+
+          <div className="grid grid-cols-1 gap-2">
+            {filteredFoods.map(f => (
+              <div key={f.id} onClick={() => setEditing(f)} className="bg-white p-4 rounded-2xl border flex justify-between items-center shadow-sm active:scale-95 transition-transform">
+                <div>
+                  <p className="font-bold text-gray-800">{f.name}</p>
+                  <div className="flex gap-1 mt-1">
+                    {f.categories.map(c => <CategoryBadge key={c} categoryId={c} small />)}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <StockIndicator stock={f.stock} compact />
+                  <RatingDisplay rating={f.rating} compact />
+                </div>
+              </div>
+            ))}
+          </div>
+          {editing && <FoodFormModal food={editing} onSave={(data) => { dispatch({type:'UPDATE_FOOD', id:editing.id, updates:data}); setEditing(null); }} onClose={() => setEditing(null)} onDelete={() => { dispatch({type:'DELETE_FOOD', id:editing.id}); setEditing(null); }} />}
+        </div>
+      );
+    }
+
+    function MealPlannerView({ foods, plans, combos, dispatch }) {
+      const [selectedDate, setSelectedDate] = useState(today());
+      const [picker, setPicker] = useState(null);
+      const [review, setReview] = useState(null);
+      const [viewMode, setViewMode] = useState('daily');
+
+      const getPlan = (date, meal) => plans.find(p => p.date === date && p.meal === meal);
+      
+      const changeDate = (offset) => {
+        const d = new Date(selectedDate + 'T00:00:00');
+        d.setDate(d.getDate() + offset);
+        setSelectedDate(formatDate(d));
+      };
+
+      const DailyView = () => (
+        <div className="space-y-3 animate-in">
+          {MEALS.map(meal => {
+            const plan = getPlan(selectedDate, meal);
+            const pFoods = plan ? plan.foodIds.map(id => foods.find(f => f.id === id)).filter(Boolean) : [];
+            return (
+              <div key={meal} onClick={() => pFoods.length ? setReview({date:selectedDate, meal}) : setPicker({date:selectedDate, meal})} className="bg-white p-5 rounded-3xl border shadow-sm active:scale-[0.98] transition-transform">
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="font-black text-lg capitalize text-kitchen-800">{meal}</h3>
+                  <BalanceIndicator foodIds={plan?.foodIds || []} foods={foods} />
+                </div>
+                {pFoods.length === 0 ? <p className="text-sm text-gray-300 font-bold border-2 border-dashed border-gray-50 rounded-xl py-4 text-center">+ Add foods</p> : (
+                  <div className="space-y-2">
+                    {pFoods.map(f => (
+                      <div key={f.id} className="flex items-center gap-3 text-sm bg-kitchen-50/50 p-2 rounded-xl">
+                        <StockIndicator stock={f.stock} compact />
+                        <span className="flex-1 font-bold text-gray-700">{f.name}</span>
+                        <RatingDisplay rating={f.rating} compact />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
+
+      const WeeklyView = () => {
+        const weekStart = getMonday(selectedDate);
+        const weekDates = getWeekDates(weekStart);
+        return (
+          <div className="overflow-x-auto -mx-4 px-4 pb-4 animate-in">
+            <div className="min-w-[700px] grid grid-cols-[80px_repeat(7,1fr)] gap-1">
+              <div />
+              {weekDates.map((d, i) => (
+                <div key={d} onClick={() => { setSelectedDate(d); setViewMode('daily'); }} className={`p-2 rounded-t-xl text-center font-black text-xs ${d === selectedDate ? 'bg-green-600 text-white' : 'bg-kitchen-100 text-kitchen-700'}`}>
+                  {DAY_LABELS[i]}<br/>{d.split('-')[2]}
+                </div>
+              ))}
+              {MEALS.map(meal => (
+                <React.Fragment key={meal}>
+                  <div className="bg-kitchen-50 text-[10px] font-black uppercase flex items-center p-2 text-kitchen-600">{meal}</div>
+                  {weekDates.map(d => {
+                    const plan = getPlan(d, meal);
+                    return (
+                      <div key={`${d}-${meal}`} onClick={() => { setSelectedDate(d); setViewMode('daily'); }} className={`h-20 bg-white border border-gray-100 p-1 overflow-hidden ${d === selectedDate ? 'bg-green-50' : ''}`}>
+                        {plan?.foodIds.map(id => <div key={id} className="text-[9px] truncate">· {foods.find(f => f.id === id)?.name}</div>)}
+                      </div>
+                    )
+                  })}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+        )
+      };
+
+      return (
+        <div className="max-w-md mx-auto">
+          <div className="bg-white p-4 rounded-3xl shadow-sm border sticky top-20 z-30 mb-4">
+            <div className="flex justify-between items-center">
+              <button onClick={() => changeDate(-1)} className="w-10 h-10 bg-gray-100 rounded-full font-black text-xl active:bg-gray-200">←</button>
+              <div className="text-center">
+                <p className="text-lg font-black text-gray-900">{selectedDate === today() ? 'Today' : formatDateShort(selectedDate)}</p>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-US', {weekday:'long'})}</p>
+              </div>
+              <button onClick={() => changeDate(1)} className="w-10 h-10 bg-gray-100 rounded-full font-black text-xl active:bg-gray-200">→</button>
+            </div>
+            <button onClick={() => setViewMode(viewMode === 'daily' ? 'weekly' : 'daily')} className="w-full mt-4 py-2 text-xs font-black uppercase tracking-widest text-kitchen-600 bg-kitchen-50 rounded-xl">
+              {viewMode === 'daily' ? '📅 Show Full Week' : '📱 Back to Daily'}
+            </button>
+          </div>
+
+          {viewMode === 'daily' ? <DailyView /> : <WeeklyView />}
+
+          {picker && <FoodPickerModal date={picker.date} meal={picker.meal} foods={foods} combos={combos} dispatch={dispatch} currentFoodIds={getPlan(picker.date, picker.meal)?.foodIds || []} onClose={() => setPicker(null)} />}
+          {review && <MealReviewModal date={review.date} meal={review.meal} plan={getPlan(review.date, review.meal)} foods={foods} dispatch={dispatch} onClose={() => setReview(null)} onAddMore={() => { setPicker({date:review.date, meal:review.meal}); setReview(null); }} />}
+        </div>
+      );
+    }
+
+    // ==========================================================================
+    // MODAL COMPONENTS
+    // ==========================================================================
+
+    function FoodPickerModal({ date, meal, foods, combos, currentFoodIds, dispatch, onClose }) {
+      const [tab, setTab] = useState('foods');
+      const [search, setSearch] = useState('');
+      const filteredFoods = foods.filter(f => f.name.toLowerCase().includes(search.toLowerCase())).sort((a,b) => a.name.localeCompare(b.name));
+
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-6">
+            <h2 className="text-xl font-black mb-4">Add to {meal}</h2>
+            <div className="flex gap-1 p-1 bg-gray-100 rounded-2xl mb-4">
+              <button onClick={() => setTab('foods')} className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${tab === 'foods' ? 'bg-white shadow text-black' : 'text-gray-400'}`}>Pantry</button>
+              <button onClick={() => setTab('combos')} className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${tab === 'combos' ? 'bg-white shadow text-black' : 'text-gray-400'}`}>Combos</button>
+            </div>
+
+            {tab === 'foods' ? (
+              <>
+                <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search pantry..." className="w-full p-3 border rounded-2xl mb-4 outline-none focus:ring-2 focus:ring-green-500 bg-gray-50" />
+                <div className="space-y-1 max-h-60 overflow-y-auto no-scrollbar">
+                  {filteredFoods.map(f => {
+                    const isSel = currentFoodIds.includes(f.id);
+                    return (
+                      <button key={f.id} onClick={() => dispatch({type:'TOGGLE_FOOD_IN_MEAL', date, meal, foodId:f.id})} className={`w-full text-left p-4 rounded-2xl border flex justify-between items-center transition-all active:scale-95 ${isSel ? 'bg-green-100 border-green-300 text-green-800' : 'bg-white border-gray-100'}`}>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold">{f.name}</span>
+                          {isSel && <span className="text-[10px] font-black">✓</span>}
+                        </div>
+                        <StockIndicator stock={f.stock} compact />
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            ) : (
+              <div className="space-y-2">
+                {combos.map(c => (
+                  <button key={c.id} onClick={() => { dispatch({type:'APPLY_COMBO', date, meal, foodIds:c.foodIds}); onClose(); }} className="w-full text-left p-4 border rounded-2xl active:bg-green-50 shadow-sm">
+                    <p className="font-black text-sm">{c.name}</p>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase mt-1">{c.foodIds.length} items</p>
+                  </button>
+                ))}
+                {combos.length === 0 && <p className="text-center py-10 text-gray-400 text-sm">No saved combos yet.</p>}
+              </div>
+            )}
+            <button onClick={onClose} className="w-full mt-6 py-4 bg-gray-900 text-white font-black rounded-2xl shadow-xl">Done</button>
+          </div>
+        </Modal>
+      );
+    }
+
+    function MealReviewModal({ date, meal, plan, foods, dispatch, onClose, onAddMore }) {
+      const pFoods = plan ? plan.foodIds.map(id => foods.find(f => f.id === id)).filter(Boolean) : [];
+      
+      const cycleStock = (food) => {
+        const next = food.stock === 'in' ? 'low' : food.stock === 'low' ? 'out' : 'in';
+        dispatch({type:'UPDATE_FOOD', id: food.id, updates: {stock: next}});
+      };
+
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-6">
+            <div className="flex justify-between items-start mb-6">
+              <div>
+                <h2 className="text-2xl font-black capitalize text-kitchen-800">{meal}</h2>
+                <p className="text-xs text-gray-400 font-bold">{formatDateShort(date)}</p>
+              </div>
+              <button 
+                onClick={() => {
+                  const name = prompt("Name this combo (e.g., 'The Usual'):");
+                  if(name) dispatch({type: 'SAVE_COMBO', name, foodIds: plan.foodIds});
+                }} 
+                className="text-[10px] font-black bg-blue-50 text-blue-600 px-3 py-2 rounded-full border border-blue-100 active:scale-95"
+              >
+                💾 SAVE AS COMBO
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {pFoods.map(f => (
+                <div key={f.id} className="p-4 bg-kitchen-50 rounded-2xl border border-kitchen-100 shadow-sm">
+                  <div className="flex justify-between items-start mb-4">
+                    <span className="font-black text-gray-800">{f.name}</span>
+                    <button onClick={() => dispatch({type:'TOGGLE_FOOD_IN_MEAL', date, meal, foodId:f.id})} className="text-gray-300 font-black text-xl leading-none">×</button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2">
+                    <button onClick={() => cycleStock(f)} className="flex items-center gap-2 bg-white px-3 py-2 rounded-xl border shadow-sm active:scale-95">
+                      <StockIndicator stock={f.stock} compact />
+                      <span className="text-[10px] font-black uppercase text-gray-500">Stock</span>
+                    </button>
+
+                    <div className="flex gap-1 bg-white p-1 rounded-xl border shadow-sm">
+                      {RATINGS.map(r => (
+                        <button key={r.id} onClick={() => dispatch({type:'UPDATE_FOOD', id:f.id, updates:{rating: f.rating === r.id ? null : r.id}})} 
+                          className={`text-2xl p-1 rounded-lg transition-all ${f.rating === r.id ? 'bg-kitchen-100 scale-110' : 'opacity-20 grayscale'}`}>
+                          {r.emoji}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-8 flex flex-col gap-2">
+              <button onClick={onAddMore} className="w-full py-4 bg-green-600 text-white rounded-2xl font-black shadow-lg shadow-green-100">+ Add More</button>
+              <button onClick={onClose} className="w-full py-3 text-gray-400 font-bold">Close</button>
+            </div>
+          </div>
+        </Modal>
+      );
+    }
+
+    function FoodFormModal({ food, onSave, onDelete, onClose }) {
+      const [name, setName] = useState(food?.name || '');
+      const [cats, setCats] = useState(food?.categories || []);
+      const [notes, setNotes] = useState(food?.notes || '');
+      const toggleCat = (c) => setCats(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
+
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-6">
+            <h2 className="text-xl font-black mb-4">{food ? 'Edit' : 'Add'} Food</h2>
+            <input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full p-4 border rounded-2xl mb-4 bg-gray-50" placeholder="Food name..." />
+            
+            <p className="text-xs font-black uppercase text-gray-400 mb-2">Categories</p>
+            <div className="flex flex-wrap gap-2 mb-6">
+              {CATEGORIES.map(c => (
+                <button key={c.id} onClick={() => toggleCat(c.id)} className={`px-4 py-2 rounded-full text-xs font-black border transition-colors ${cats.includes(c.id) ? c.color : 'bg-gray-50 text-gray-400'}`}>{c.label}</button>
+              ))}
+            </div>
+
+            <textarea value={notes} onChange={e => setNotes(e.target.value)} className="w-full p-4 border rounded-2xl mb-6 bg-gray-50 text-sm" placeholder="Notes (e.g., likes it cold)" rows="2" />
+
+            <div className="flex gap-2">
+              {food && <button onClick={onDelete} className="flex-1 py-4 text-red-500 font-bold">Delete</button>}
+              <button onClick={() => onSave({name, categories: cats, notes})} className="flex-[2] py-4 bg-green-600 text-white rounded-2xl font-black shadow-lg">Save Changes</button>
+            </div>
+          </div>
+        </Modal>
+      );
+    }
+
+    // ==========================================================================
+    // ROOT APP
+    // ==========================================================================
+
+    function App() {
+      const [state, dispatch] = useReducer(appReducer, null, () => ({
+        foods: loadFromStorage(STORAGE_KEYS.foods, []),
+        plans: loadFromStorage(STORAGE_KEYS.plans, []),
+        combos: loadFromStorage(STORAGE_KEYS.combos, [])
+      }));
+      const [tab, setTab] = useState('pantry');
+      const [showAdd, setShowAdd] = useState(false);
+
+      useEffect(() => {
+        saveToStorage(STORAGE_KEYS.foods, state.foods);
+        saveToStorage(STORAGE_KEYS.plans, state.plans);
+        saveToStorage(STORAGE_KEYS.combos, state.combos);
+      }, [state]);
+
+      return (
+        <div className="min-h-screen pb-20">
+          <header className="bg-white border-b sticky top-0 z-40 p-4 pt-10 shadow-sm">
+            <div className="max-w-md mx-auto flex justify-between items-center">
+              <h1 className="text-2xl font-black text-gray-800 tracking-tight">🍽️ Meals</h1>
+              <nav className="flex gap-1 bg-gray-100 p-1 rounded-2xl">
+                {['pantry', 'planner', 'shopping'].map(t => (
+                  <button key={t} onClick={() => setTab(t)} className={`px-5 py-2 text-xs font-black rounded-xl capitalize transition-all ${tab === t ? 'bg-white shadow text-black' : 'text-gray-400'}`}>{t}</button>
+                ))}
+              </nav>
+            </div>
+          </header>
+
+          <main className="max-w-md mx-auto p-4 pt-6">
+            {tab === 'pantry' && <PantryView foods={state.foods} dispatch={dispatch} />}
+            {tab === 'planner' && <MealPlannerView foods={state.foods} plans={state.plans} combos={state.combos} dispatch={dispatch} />}
+            {tab === 'shopping' && <ShoppingListView foods={state.foods} plans={state.plans} dispatch={dispatch} />}
+          </main>
+
+          {tab === 'pantry' && (
+            <button onClick={() => setShowAdd(true)} className="fixed bottom-8 right-8 w-16 h-16 bg-green-600 text-white rounded-full shadow-2xl text-4xl font-black flex items-center justify-center active:scale-90 transition-transform">＋</button>
+          )}
+
+          {showAdd && <FoodFormModal onSave={(data) => { dispatch({type:'ADD_FOOD', ...data}); setShowAdd(false); }} onClose={() => setShowAdd(false)} />}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

@@ -1,0 +1,741 @@
+{
+  "version": 1,
+  "exportedAt": "2026-02-15T02:39:36.285Z",
+  "foods": [
+    {
+      "id": "185bf14a-8169-4250-8106-e340b3f5fa9d",
+      "name": "Banana Bread Crisps",
+      "categories": [
+        "fruit"
+      ],
+      "stock": "in",
+      "rating": null,
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "b6aa5fe0-3d86-4282-b1d4-612dcb5623d5",
+      "name": "Blueberries",
+      "categories": [
+        "fruit"
+      ],
+      "stock": "in",
+      "rating": "loves",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "8136fc95-b773-4dc5-8847-0933864492f1",
+      "name": "Canned Pasta in Tomato & Cheese Sauce",
+      "categories": [
+        "carb",
+        "protein",
+        "veggie"
+      ],
+      "stock": "in",
+      "rating": null,
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "dd3c9606-78c2-44f5-a4e4-557e81ce4ed2",
+      "name": "Cantaloupe",
+      "categories": [
+        "fruit"
+      ],
+      "stock": "in",
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "eaa6b210-6b47-4a06-8110-49089b92c62f",
+      "name": "Cheddar Cheese Snacks",
+      "categories": [
+        "protein"
+      ],
+      "stock": "in",
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "78cac15b-a693-42ab-8f6d-f96fc6293714",
+      "name": "Cherry Tomatoes",
+      "categories": [
+        "veggie"
+      ],
+      "stock": "in",
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "0c13f001-dee4-411f-b6ae-72c1b6e8c598",
+      "name": "Chicken & Vegetable Dino Nuggets",
+      "categories": [
+        "protein",
+        "veggie"
+      ],
+      "stock": "in",
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "f1865727-8e0b-49ad-8d23-dd0c05eeee93",
+      "name": "Chicken Pot Pie",
+      "categories": [
+        "carb",
+        "protein",
+        "veggie"
+      ],
+      "stock": "in",
+      "rating": null,
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "482367f4-491b-4b26-bafc-02cf9af3fc52",
+      "name": "Cod",
+      "categories": [
+        "protein"
+      ],
+      "stock": "in",
+      "rating": "neutral",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "b0a0dc81-c353-4570-b4b4-a774d95500be",
+      "name": "Cream of Tomato Soup",
+      "categories": [
+        "veggie"
+      ],
+      "stock": "in",
+      "rating": "loves",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "c465051f-4462-4baa-a9c3-6494355b5737",
+      "name": "Eggs",
+      "categories": [
+        "protein"
+      ],
+      "stock": "in",
+      "rating": "neutral",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "d535c851-92bc-4f3a-abfb-b9bf5d1fb7cd",
+      "name": "Green Pea Snack Crisps",
+      "categories": [
+        "veggie"
+      ],
+      "stock": "in",
+      "rating": "neutral",
+      "notes": "",
+      "lastTried": "2026-02-14",
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "dbabae3c-98d5-484f-a519-200d2ad6424a",
+      "name": "Hass Avocados",
+      "categories": [
+        "veggie"
+      ],
+      "stock": "in",
+      "rating": "likes",
+      "notes": "",
+      "lastTried": "2026-02-14",
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "169a71b6-5008-4c83-a0ba-eff7da27fda7",
+      "name": "Honeycrisp Apples",
+      "categories": [
+        "fruit"
+      ],
+      "stock": "in",
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "043f8e16-c9e7-4f12-a10a-33275df8af04",
+      "name": "Kids Yogurt Pouches (Banana Vanilla)",
+      "categories": [
+        "protein",
+        "fruit"
+      ],
+      "stock": "in",
+      "rating": "likes",
+      "notes": "",
+      "lastTried": "2026-02-14",
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "86587c9d-d636-4681-abd7-7015a5c16a7a",
+      "name": "Kids Yogurt Pouches (Blueberry Apple Carrot)",
+      "categories": [
+        "protein",
+        "veggie",
+        "fruit"
+      ],
+      "stock": "in",
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "2ade2139-ec98-4c3f-99da-93bf34f36f67",
+      "name": "Kiwi",
+      "categories": [
+        "fruit"
+      ],
+      "stock": "in",
+      "rating": "loves",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "811e429c-b202-4b2f-b456-fdc340d93442",
+      "name": "Neapolitan Bunny Graham Snacks",
+      "categories": [
+        "snack",
+        "carb"
+      ],
+      "stock": "in",
+      "rating": "loves",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "c6d09c49-dc3f-4e58-a18d-63250983a42b",
+      "name": "Oat Super Fruity Cereal",
+      "categories": [
+        "carb",
+        "protein"
+      ],
+      "stock": "in",
+      "rating": null,
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "0f2f2eb8-c64d-4093-b13e-4e4fb64f06a7",
+      "name": "Plant Based Mozzarella Sticks",
+      "categories": [
+        "protein",
+        "veggie"
+      ],
+      "stock": "in",
+      "rating": null,
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "434357de-5327-4973-bcaf-141c07089588",
+      "name": "Raspberry & Kale Bar",
+      "categories": [
+        "snack"
+      ],
+      "stock": "in",
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "3b1802c8-e404-4312-aa54-67b69257c4e2",
+      "name": "Red Bell Peppers",
+      "categories": [
+        "veggie"
+      ],
+      "stock": "in",
+      "rating": "dislikes",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "e70255b9-2a43-4f42-a732-8086bd49c59b",
+      "name": "Sliced Mild Cheddar Cheese",
+      "categories": [
+        "protein"
+      ],
+      "stock": "in",
+      "rating": "neutral",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "9130d0d0-3c59-4b2e-b280-c9f96126f76f",
+      "name": "Strawberries",
+      "categories": [
+        "fruit"
+      ],
+      "stock": "in",
+      "rating": "loves",
+      "notes": "",
+      "lastTried": "2026-02-14",
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "3208d4fa-2b0e-4db1-a56e-402f6b841c78",
+      "name": "Strawberry Kale Smoothie Melts",
+      "categories": [
+        "snack",
+        "veggie",
+        "fruit",
+        "protein"
+      ],
+      "stock": "in",
+      "rating": "loves",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "70841bf3-a438-4d52-b390-adaa54aaafb0",
+      "name": "Strawberry, Pumpkin & Beet Bar",
+      "categories": [
+        "snack"
+      ],
+      "stock": "in",
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "f702be57-5937-43c9-bfeb-e7159c026e0d",
+      "name": "Sugar Snap Peas",
+      "categories": [
+        "veggie"
+      ],
+      "stock": "in",
+      "rating": null,
+      "notes": "",
+      "lastTried": "2026-02-14",
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "c51cc9c9-86b7-4450-89b4-f5769ba7f144",
+      "name": "Sumo Citrus",
+      "categories": [
+        "fruit"
+      ],
+      "stock": "in",
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "4e080049-5834-452b-9238-c6c0f33be7cc",
+      "name": "Sweet Potato Fries",
+      "categories": [
+        "veggie"
+      ],
+      "stock": "in",
+      "rating": "dislikes",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "62844705-ebc8-40c1-99ce-159511588583",
+      "name": "Tropical Greens Yogurt Melts",
+      "categories": [
+        "snack",
+        "veggie",
+        "fruit",
+        "protein"
+      ],
+      "stock": "in",
+      "rating": "loves",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "ac338d48-5479-444e-b1ba-282052c33682",
+      "name": "White Bread",
+      "categories": [
+        "carb"
+      ],
+      "stock": "in",
+      "rating": "neutral",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "059b2f38-cfaf-48cd-9e39-30a0806f7d60",
+      "name": "White Cheddar Mac and Cheese",
+      "categories": [
+        "protein",
+        "carb"
+      ],
+      "stock": "in",
+      "rating": "neutral",
+      "notes": "",
+      "lastTried": null,
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "d405b61f-7e5c-434f-9685-575b650df711",
+      "name": "Whole Milk",
+      "categories": [
+        "protein"
+      ],
+      "stock": "in",
+      "rating": "likes",
+      "notes": "",
+      "lastTried": "2026-02-14",
+      "createdAt": "2026-02-15"
+    },
+    {
+      "id": "e85c12e4-32f6-4750-90f1-1cdc7aabe4b1",
+      "name": "Taco (chicken/cheese)",
+      "categories": [
+        "carb",
+        "protein"
+      ],
+      "stock": "out",
+      "rating": "dislikes",
+      "notes": "",
+      "lastTried": "2026-02-14",
+      "createdAt": "2026-02-15"
+    }
+  ],
+  "plans": [
+    {
+      "id": "02b80a77-061c-41b4-bbc4-07497bae8477",
+      "date": "2026-02-14",
+      "meal": "dinner",
+      "foodIds": [
+        "e85c12e4-32f6-4750-90f1-1cdc7aabe4b1",
+        "9130d0d0-3c59-4b2e-b280-c9f96126f76f",
+        "d535c851-92bc-4f3a-abfb-b9bf5d1fb7cd",
+        "dbabae3c-98d5-484f-a519-200d2ad6424a",
+        "043f8e16-c9e7-4f12-a10a-33275df8af04",
+        "d405b61f-7e5c-434f-9685-575b650df711"
+      ]
+    }
+  ],
+  "foodMemory": {
+    "cantaloupe": {
+      "categories": [
+        "fruit"
+      ],
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null
+    },
+    "oat super fruity cereal": {
+      "categories": [
+        "carb",
+        "protein"
+      ],
+      "rating": null,
+      "notes": "",
+      "lastTried": null
+    },
+    "cream of tomato soup": {
+      "categories": [
+        "veggie"
+      ],
+      "rating": "loves",
+      "notes": "",
+      "lastTried": null
+    },
+    "blueberries": {
+      "categories": [
+        "fruit"
+      ],
+      "rating": "loves",
+      "notes": "",
+      "lastTried": null
+    },
+    "white cheddar mac and cheese": {
+      "categories": [
+        "protein",
+        "carb"
+      ],
+      "rating": "neutral",
+      "notes": "",
+      "lastTried": null
+    },
+    "whole milk": {
+      "categories": [
+        "protein"
+      ],
+      "rating": "likes",
+      "notes": "",
+      "lastTried": "2026-02-14"
+    },
+    "green pea snack crisps": {
+      "categories": [
+        "veggie"
+      ],
+      "rating": "neutral",
+      "notes": "",
+      "lastTried": "2026-02-14"
+    },
+    "banana bread crisps": {
+      "categories": [
+        "fruit"
+      ],
+      "rating": null,
+      "notes": "",
+      "lastTried": null
+    },
+    "kids yogurt pouches (blueberry apple carrot)": {
+      "categories": [
+        "protein",
+        "veggie",
+        "fruit"
+      ],
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null
+    },
+    "kids yogurt pouches (banana vanilla)": {
+      "categories": [
+        "protein",
+        "fruit"
+      ],
+      "rating": "likes",
+      "notes": "",
+      "lastTried": "2026-02-14"
+    },
+    "raspberry & kale bar": {
+      "categories": [
+        "snack"
+      ],
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null
+    },
+    "kiwi": {
+      "categories": [
+        "fruit"
+      ],
+      "rating": "loves",
+      "notes": "",
+      "lastTried": null
+    },
+    "strawberries": {
+      "categories": [
+        "fruit"
+      ],
+      "rating": "loves",
+      "notes": "",
+      "lastTried": "2026-02-14"
+    },
+    "strawberry, pumpkin & beet bar": {
+      "categories": [
+        "snack"
+      ],
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null
+    },
+    "hass avocados": {
+      "categories": [
+        "veggie"
+      ],
+      "rating": "likes",
+      "notes": "",
+      "lastTried": "2026-02-14"
+    },
+    "sumo citrus": {
+      "categories": [
+        "fruit"
+      ],
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null
+    },
+    "sugar snap peas": {
+      "categories": [
+        "veggie"
+      ],
+      "rating": null,
+      "notes": "",
+      "lastTried": "2026-02-14"
+    },
+    "cheddar cheese snacks": {
+      "categories": [
+        "protein"
+      ],
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null
+    },
+    "chicken pot pie": {
+      "categories": [
+        "carb",
+        "protein",
+        "veggie"
+      ],
+      "rating": null,
+      "notes": "",
+      "lastTried": null
+    },
+    "canned pasta in tomato & cheese sauce": {
+      "categories": [
+        "carb",
+        "protein",
+        "veggie"
+      ],
+      "rating": null,
+      "notes": "",
+      "lastTried": null
+    },
+    "honeycrisp apples": {
+      "categories": [
+        "fruit"
+      ],
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null
+    },
+    "sliced mild cheddar cheese": {
+      "categories": [
+        "protein"
+      ],
+      "rating": "neutral",
+      "notes": "",
+      "lastTried": null
+    },
+    "plant based mozzarella sticks": {
+      "categories": [
+        "protein",
+        "veggie"
+      ],
+      "rating": null,
+      "notes": "",
+      "lastTried": null
+    },
+    "taco (chicken/cheese)": {
+      "categories": [
+        "carb",
+        "protein"
+      ],
+      "rating": "dislikes",
+      "notes": "",
+      "lastTried": "2026-02-14"
+    },
+    "cod": {
+      "categories": [
+        "protein"
+      ],
+      "rating": "neutral",
+      "notes": "",
+      "lastTried": null
+    },
+    "white bread": {
+      "categories": [
+        "carb"
+      ],
+      "rating": "neutral",
+      "notes": "",
+      "lastTried": null
+    },
+    "cherry tomatoes": {
+      "categories": [
+        "veggie"
+      ],
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null
+    },
+    "neapolitan bunny graham snacks": {
+      "categories": [
+        "snack",
+        "carb"
+      ],
+      "rating": "loves",
+      "notes": "",
+      "lastTried": null
+    },
+    "red bell peppers": {
+      "categories": [
+        "veggie"
+      ],
+      "rating": "dislikes",
+      "notes": "",
+      "lastTried": null
+    },
+    "eggs": {
+      "categories": [
+        "protein"
+      ],
+      "rating": "neutral",
+      "notes": "",
+      "lastTried": null
+    },
+    "strawberry kale smoothie melts": {
+      "categories": [
+        "snack",
+        "veggie",
+        "fruit",
+        "protein"
+      ],
+      "rating": "loves",
+      "notes": "",
+      "lastTried": null
+    },
+    "tropical greens yogurt melts": {
+      "categories": [
+        "snack",
+        "veggie",
+        "fruit",
+        "protein"
+      ],
+      "rating": "loves",
+      "notes": "",
+      "lastTried": null
+    },
+    "sweet potato fries": {
+      "categories": [
+        "veggie"
+      ],
+      "rating": "dislikes",
+      "notes": "",
+      "lastTried": null
+    },
+    "chicken & vegetable dino nuggets": {
+      "categories": [
+        "protein",
+        "veggie"
+      ],
+      "rating": "likes",
+      "notes": "",
+      "lastTried": null
+    }
+  }
+}

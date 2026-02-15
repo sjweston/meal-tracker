@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Meal Tracker</title>
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="theme-color" content="#167188" />
+	<meta name="apple-mobile-web-app-capable" content="yes">
+	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+	<meta name="apple-mobile-web-app-title" content="Meals">
+	<link rel="apple-touch-icon" href="apple-touch-icon.png">
+	<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { colors: { 
+        brand: { 50: '#f0f7f9', 100: '#daebf1', 500: '#167188', 900: '#0D4250' },
+        accent: '#FF6B6B',
+        neutral: '#7E7F7F'
+      } } }
+    }
+  </script>
+  <style>
+    body { padding-bottom: env(safe-area-inset-bottom); background: #f0f7f9; }
+    html { overscroll-behavior: none; }
+    button, nav { -webkit-user-select: none; user-select: none; }
+    .animate-in { animation: fadeIn 0.3s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .food-card { transition: transform 0.1s ease; }
+    .food-card:active { transform: scale(0.97); }
+  </style>
+</head>
+<body class="text-slate-800">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useReducer, useCallback, useMemo, useRef } = React;
+
+    // --- Helpers ---
+    const generateId = () => {
+      try { return crypto.randomUUID(); } 
+      catch (e) { return Math.random().toString(36).substring(2, 15); }
+    };
+    const CATEGORIES = [
+      { id: 'carb', label: 'Carb', color: 'bg-amber-100 text-amber-800 border-amber-300' },
+      { id: 'protein', label: 'Protein', color: 'bg-red-100 text-red-800 border-red-300' },
+      { id: 'fruit', label: 'Fruit', color: 'bg-purple-100 text-purple-800 border-purple-300' },
+      { id: 'veggie', label: 'Veggie', color: 'bg-green-100 text-green-700 border-green-300' },
+      { id: 'snack', label: 'Snack', color: 'bg-blue-100 text-blue-800 border-blue-300' },
+    ];
+    const BALANCE_CATEGORIES = ['carb', 'protein', 'fruit', 'veggie'];
+    const RATINGS = [
+      { id: 'loves', emoji: '😍', label: 'Loves' },
+      { id: 'likes', emoji: '😊', label: 'Likes' },
+      { id: 'neutral', emoji: '😐', label: 'Neutral' },
+      { id: 'dislikes', emoji: '😣', label: 'Dislikes' },
+    ];
+    const STOCK_OPTIONS = [
+      { id: 'in', label: 'In', icon: '🟢', color: 'bg-green-50 border-green-300 text-green-700' },
+      { id: 'low', label: 'Low', icon: '🟡', color: 'bg-yellow-50 border-yellow-300 text-yellow-700' },
+      { id: 'out', label: 'Out', icon: '🔴', color: 'bg-red-50 border-red-300 text-red-700' },
+    ];
+    const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
+    const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+    const today = () => new Date().toISOString().split('T')[0];
+    const formatDateShort = (dStr) => new Date(dStr + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    
+    // NEW: Relative Date Helper
+    const getRelativeDate = (dStr) => {
+      if (!dStr) return null;
+      const t = new Date(today() + 'T00:00:00');
+      const d = new Date(dStr + 'T00:00:00');
+      const diffTime = t - d;
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      if (diffDays === 0) return 'Eaten today';
+      if (diffDays === 1) return 'Eaten yesterday';
+      return `Eaten ${diffDays} days ago`;
+    };
+
+    const getMonday = (date) => {
+      const d = new Date(date);
+      const day = d.getDay();
+      const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+      d.setDate(diff);
+      d.setHours(0, 0, 0, 0);
+      return d;
+    };
+
+    // --- Reducer ---
+    const appReducer = (state, action) => {
+      switch (action.type) {
+        case 'ADD_FOOD': {
+          const memory = state.foodMemory?.[action.name.toLowerCase().trim()] || {};
+          const food = { 
+            id: generateId(), 
+            name: action.name, 
+            categories: action.categories || memory.categories || [], 
+            stock: action.stock || 'in', 
+            rating: action.rating || memory.rating || null, 
+            notes: action.notes || memory.notes || '', 
+            lastTried: memory.lastTried || null, 
+            createdAt: today() 
+          };
+          const newMemory = { ...state.foodMemory, [food.name.toLowerCase().trim()]: { categories: food.categories, rating: food.rating, notes: food.notes, lastTried: food.lastTried } };
+          return { ...state, foods: [...state.foods, food], foodMemory: newMemory };
+        }
+        case 'BATCH_ADD': {
+          let currentFoods = [...state.foods];
+          let currentMemory = { ...state.foodMemory };
+          action.names.forEach(name => {
+            if (!name.trim()) return;
+            const cleanName = name.trim();
+            if (currentFoods.some(f => f.name.toLowerCase() === cleanName.toLowerCase())) return;
+            const mem = currentMemory[cleanName.toLowerCase()] || {};
+            const food = { id: generateId(), name: cleanName, categories: mem.categories || [], stock: 'in', rating: mem.rating || null, notes: mem.notes || '', lastTried: mem.lastTried || null, createdAt: today() };
+            currentFoods.push(food);
+            currentMemory[cleanName.toLowerCase()] = { categories: food.categories, rating: food.rating, notes: food.notes, lastTried: food.lastTried };
+          });
+          return { ...state, foods: currentFoods, foodMemory: currentMemory };
+        }
+        case 'UPDATE_FOOD': {
+          const updated = state.foods.map(f => f.id === action.id ? { ...f, ...action.updates } : f);
+          const f = updated.find(x => x.id === action.id);
+          const newMem = { ...state.foodMemory, [f.name.toLowerCase().trim()]: { categories: f.categories, rating: f.rating, notes: f.notes, lastTried: f.lastTried } };
+          return { ...state, foods: updated, foodMemory: newMem };
+        }
+        case 'DELETE_FOOD': return { ...state, foods: state.foods.filter(f => f.id !== action.id), shoppingDismissed: (state.shoppingDismissed || []).filter(id => id !== action.id) };
+        case 'TOGGLE_FOOD_IN_MEAL': {
+          const plan = state.plans.find(p => p.date === action.date && p.meal === action.meal);
+          if (!plan?.foodIds.includes(action.foodId)) {
+            const updatedFoods = state.foods.map(f => f.id === action.foodId ? { ...f, lastTried: action.date } : f);
+            if (plan) return { ...state, foods: updatedFoods, plans: state.plans.map(p => p.id === plan.id ? { ...p, foodIds: [...p.foodIds, action.foodId] } : p) };
+            return { ...state, foods: updatedFoods, plans: [...state.plans, { id: generateId(), date: action.date, meal: action.meal, foodIds: [action.foodId] }] };
+          }
+          return { ...state, plans: state.plans.map(p => (p.date === action.date && p.meal === action.meal) ? { ...p, foodIds: p.foodIds.filter(id => id !== action.foodId) } : p).filter(p => p.foodIds.length > 0) };
+        }
+        case 'SAVE_COMBO': return { ...state, combos: [...state.combos, { id: generateId(), name: action.name, foodIds: action.foodIds }] };
+        case 'APPLY_COMBO': {
+          let s = state;
+          action.foodIds.forEach(fid => { s = appReducer(s, { type: 'TOGGLE_FOOD_IN_MEAL', date: action.date, meal: action.meal, foodId: fid }); });
+          return s;
+        }
+        case 'DISMISS_SHOPPING': return { ...state, shoppingDismissed: [...(state.shoppingDismissed || []), action.id] };
+        default: return state;
+      }
+    };
+
+    // --- UI Components ---
+    const Modal = ({ children, onClose }) => (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-brand-900/60 p-4 animate-in" onClick={(e) => e.target === e.currentTarget && onClose()}>
+        <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-md max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>{children}</div>
+      </div>
+    );
+    const StockIndicator = ({ stock, compact }) => {
+      const opt = STOCK_OPTIONS.find(o => o.id === stock) || STOCK_OPTIONS[0];
+      return compact ? <span>{opt.icon}</span> : <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${opt.color}`}>{opt.icon} {opt.label}</span>;
+    };
+    const CategoryBadge = ({ categoryId, small }) => {
+      const cat = CATEGORIES.find(c => c.id === categoryId);
+      return <span className={`border rounded-full font-black ${cat?.color} ${small ? 'text-[8px] px-1' : 'text-[10px] px-2 py-0.5'}`}>{cat?.label}</span>;
+    };
+    const RatingDisplay = ({ rating, compact }) => { const r = RATINGS.find(rt => rt.id === rating); if (!r) return null; return compact ? <span>{r.emoji}</span> : <span className="text-sm">{r.emoji} {r.label}</span>; };
+
+    // ==========================================================================
+    // VIEW COMPONENTS
+    // ==========================================================================
+
+    function TodayView({ foods, plans, dispatch }) {
+      const [reviewMode, setReviewMode] = useState(false);
+      const todaysPlan = plans.filter(p => p.date === today());
+      const allPlannedToday = todaysPlan.flatMap(p => p.foodIds).map(id => foods.find(f => f.id === id)).filter(Boolean);
+      const unrated = allPlannedToday.filter(f => !f.rating);
+
+      const streakStats = useMemo(() => {
+        const stats = [];
+        for (let i = 0; i < 7; i++) {
+          let d = new Date(); d.setDate(d.getDate() - i);
+          const dStr = d.toISOString().split('T')[0];
+          const dayPlans = plans.filter(p => p.date === dStr && p.meal !== 'snack');
+          const covered = new Set();
+          dayPlans.forEach(p => p.foodIds.forEach(fid => foods.find(f => f.id === fid)?.categories.forEach(c => covered.add(c))));
+          stats.push({ date: dStr, balanced: BALANCE_CATEGORIES.every(c => covered.has(c)) });
+        }
+        return stats.reverse();
+      }, [plans, foods]);
+
+      const currentStreak = useMemo(() => {
+        let count = 0; let d = new Date();
+        while (true) {
+          const dStr = d.toISOString().split('T')[0];
+          const dayPlans = plans.filter(p => p.date === dStr && p.meal !== 'snack');
+          const covered = new Set();
+          dayPlans.forEach(p => p.foodIds.forEach(fid => foods.find(f => f.id === fid)?.categories.forEach(c => covered.add(c))));
+          if (BALANCE_CATEGORIES.every(c => covered.has(c))) { count++; d.setDate(d.getDate() - 1); } else break;
+        }
+        return count;
+      }, [plans, foods]);
+
+      return (
+        <div className="animate-in pb-24">
+          <div className="bg-brand-500 rounded-[2.5rem] p-8 text-white shadow-xl mb-6 relative overflow-hidden">
+            <div className="relative z-10">
+              <h2 className="text-5xl font-black mb-1">{currentStreak} Day{currentStreak !== 1 ? 's' : ''}</h2>
+              <p className="text-brand-100 font-bold uppercase tracking-widest text-[10px]">Balanced Meal Streak 🔥</p>
+              
+              <div className="flex gap-2 mt-6">
+                {streakStats.map((s, i) => (
+                  <div key={i} className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-black ${s.balanced ? 'bg-white text-brand-500 shadow-lg' : 'bg-brand-900/20 text-brand-100 border border-brand-100/20'}`}>
+                    {s.date === today() ? 'T' : s.date.split('-')[2]}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 mb-8">
+            <div className="bg-white p-6 rounded-[2rem] border-b-4 border-slate-100">
+              <p className="text-3xl font-black text-brand-500">{foods.filter(f => f.lastTried && f.lastTried.startsWith(today().substring(0,7))).length}</p>
+              <p className="text-[10px] font-bold text-neutral uppercase tracking-tight">New foods this month</p>
+            </div>
+            <div className="bg-white p-6 rounded-[2rem] border-b-4 border-slate-100">
+              <p className="text-3xl font-black text-accent">{foods.filter(f => f.stock !== 'in').length}</p>
+              <p className="text-[10px] font-bold text-neutral uppercase tracking-tight">Grocery list items</p>
+            </div>
+          </div>
+
+          {unrated.length > 0 && (
+            <button onClick={() => setReviewMode(true)} className="w-full bg-brand-900 text-white p-6 rounded-[2rem] shadow-xl flex items-center justify-between group active:scale-95 transition-all">
+              <div className="text-left">
+                <p className="text-xl font-black">How was dinner? 🍽️</p>
+                <p className="text-xs opacity-60 font-bold uppercase tracking-widest mt-1">Daily Preference Check-in</p>
+              </div>
+              <span className="text-3xl group-hover:translate-x-1 transition-transform">→</span>
+            </button>
+          )}
+
+          {reviewMode && (
+            <Modal onClose={() => setReviewMode(false)}>
+              <div className="p-8">
+                <h2 className="text-2xl font-black mb-6 text-center text-brand-900">Review Today</h2>
+                <div className="space-y-6">
+                  {unrated.map(f => (
+                    <div key={f.id} className="text-center p-6 bg-brand-50 rounded-3xl border border-brand-100">
+                      <p className="font-black text-xl mb-4 text-brand-900">{f.name}</p>
+                      <div className="flex justify-center gap-3">
+                        {RATINGS.map(r => (
+                          <button key={r.id} onClick={() => { dispatch({type:'UPDATE_FOOD', id:f.id, updates:{rating:r.id}}); if(unrated.length === 1) setReviewMode(false); }} className="text-4xl p-4 bg-white rounded-2xl shadow-sm active:scale-90 hover:shadow-md transition-all">
+                            {r.emoji}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => setReviewMode(false)} className="w-full mt-8 py-4 font-black text-neutral uppercase tracking-widest text-xs">Finish Later</button>
+              </div>
+            </Modal>
+          )}
+        </div>
+      );
+    }
+
+    function PantryView({ foods, dispatch }) {
+      const [editing, setEditing] = useState(null);
+      const [batchMode, setBatchMode] = useState(false);
+      const [search, setSearch] = useState('');
+      const [batchInput, setBatchInput] = useState('');
+
+      const filtered = foods.filter(f => f.name.toLowerCase().includes(search.toLowerCase())).sort((a,b) => a.name.localeCompare(b.name));
+
+      const handleBatch = () => {
+        const names = batchInput.split(/[,\n]/).map(n => n.trim()).filter(Boolean);
+        dispatch({ type: 'BATCH_ADD', names });
+        setBatchInput(''); setBatchMode(false);
+      };
+
+      return (
+        <div className="animate-in pb-24">
+          <div className="flex gap-2 mb-6">
+            <input type="text" placeholder="Search pantry..." value={search} onChange={e => setSearch(e.target.value)} className="flex-1 p-4 rounded-2xl border-none bg-white shadow-sm font-bold placeholder:text-slate-300" />
+            <button onClick={() => setBatchMode(true)} className="bg-brand-500 text-white px-4 rounded-2xl font-black text-xs uppercase shadow-lg shadow-brand-100">Batch Add</button>
+          </div>
+
+          <div className="space-y-2">
+            {filtered.map(f => (
+              <div key={f.id} onClick={() => setEditing(f)} className="food-card bg-white p-5 rounded-2xl border-b-2 border-slate-100 flex justify-between items-center shadow-sm">
+                <div>
+                  <p className="font-bold text-brand-900">{f.name}</p>
+                  <div className="flex gap-1 mt-1">
+                    {f.categories.map(c => <CategoryBadge key={c} categoryId={c} small />)}
+                    {/* NEW: Relative display in Pantry */}
+                    {f.lastTried && <span className="text-[8px] font-bold text-neutral uppercase tracking-widest ml-1">{getRelativeDate(f.lastTried)}</span>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-4"><RatingDisplay rating={f.rating} compact /><StockIndicator stock={f.stock} compact /></div>
+              </div>
+            ))}
+          </div>
+
+          {batchMode && (
+            <Modal onClose={() => setBatchMode(false)}>
+              <div className="p-8">
+                <h2 className="text-2xl font-black mb-2 text-brand-900">Batch Add</h2>
+                <p className="text-xs text-neutral font-bold mb-4">Paste a list (comma or newline separated).</p>
+                <textarea value={batchInput} onChange={e => setBatchInput(e.target.value)} className="w-full p-4 bg-brand-50 rounded-2xl border-none font-bold text-brand-900 outline-none h-40 mb-6" placeholder="Apples, Broccoli, Chicken..."></textarea>
+                <div className="flex gap-2">
+                  <button onClick={() => setBatchMode(false)} className="flex-1 py-4 font-black text-neutral">Cancel</button>
+                  <button onClick={handleBatch} className="flex-[2] bg-brand-500 text-white rounded-2xl font-black shadow-lg">Import Items</button>
+                </div>
+              </div>
+            </Modal>
+          )}
+
+          {editing && <FoodFormModal food={editing} onSave={(d) => { dispatch({type:'UPDATE_FOOD', id:editing.id, updates:d}); setEditing(null); }} onDelete={() => { dispatch({type:'DELETE_FOOD', id:editing.id}); setEditing(null); }} onClose={() => setEditing(null)} />}
+        </div>
+      );
+    }
+
+    function ShoppingListView({ foods, plans, dismissed, dispatch }) {
+      const weekPlans = plans.filter(p => p.date >= today());
+      const neededIds = new Set(weekPlans.flatMap(p => p.foodIds));
+      const list = foods.filter(f => {
+        if (f.rating === 'dislikes') return false;
+        if (dismissed?.includes(f.id)) return false;
+        return (neededIds.has(f.id) && f.stock !== 'in') || f.stock === 'low' || f.stock === 'out';
+      });
+
+      return (
+        <div className="animate-in pb-24">
+          <h2 className="text-3xl font-black mb-6 text-brand-900">Shopping List</h2>
+          {list.length === 0 ? <p className="text-neutral text-center py-20 font-bold">Nothing needed! ✨</p> : list.map(f => (
+            <div key={f.id} className="bg-white p-5 rounded-2xl border-b-2 border-slate-100 mb-2 flex justify-between items-center shadow-sm">
+              <div className="flex-1">
+                <p className="font-bold text-brand-900">{f.name}</p>
+                <div className="flex gap-2 mt-1">
+                  <StockIndicator stock={f.stock} compact />
+                  {neededIds.has(f.id) && <span className="text-[8px] font-black bg-brand-100 text-brand-500 px-1 rounded uppercase tracking-wider">Planned</span>}
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <button onClick={() => dispatch({type:'DISMISS_SHOPPING', id:f.id})} className="text-[10px] font-black text-neutral py-2 px-3 hover:bg-slate-50 rounded-lg">DISMISS</button>
+                <button onClick={() => dispatch({type:'UPDATE_FOOD', id:f.id, updates:{stock:'in'}})} className="bg-brand-500 text-white px-5 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-brand-100 active:scale-95">GOT IT</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function FoodFormModal({ food, onSave, onDelete, onClose }) {
+      const [name, setName] = useState(food?.name || '');
+      const [cats, setCats] = useState(food?.categories || []);
+      const [rating, setRating] = useState(food?.rating || null);
+      const [notes, setNotes] = useState(food?.notes || '');
+      
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-8">
+            <div className="flex justify-between items-start mb-6">
+              <h2 className="text-2xl font-black text-brand-900">{food ? 'Edit' : 'New'} Food</h2>
+              {/* NEW: Relative display in Modal */}
+              {food?.lastTried && <span className="text-[9px] font-black text-neutral uppercase tracking-widest bg-brand-50 px-2 py-1 rounded-lg">{getRelativeDate(food.lastTried)}</span>}
+            </div>
+            
+            <input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full p-4 bg-brand-50 rounded-2xl border-none mb-6 outline-none font-bold text-brand-900" placeholder="Chicken, Rice, etc..." />
+            
+            <p className="text-[10px] font-black uppercase text-neutral mb-3 tracking-widest">Preference</p>
+            <div className="flex justify-between mb-8">
+              {RATINGS.map(r => (
+                <button key={r.id} onClick={() => setRating(rating === r.id ? null : r.id)} className={`text-4xl p-4 rounded-2xl transition-all ${rating === r.id ? 'bg-brand-100 shadow-md ring-2 ring-brand-500' : 'opacity-20 grayscale'}`}>{r.emoji}</button>
+              ))}
+            </div>
+
+            <p className="text-[10px] font-black uppercase text-neutral mb-3 tracking-widest">Category</p>
+            <div className="flex flex-wrap gap-2 mb-8">
+              {CATEGORIES.map(c => (
+                <button key={c.id} onClick={() => setCats(cats.includes(c.id) ? cats.filter(x => x !== c.id) : [...cats, c.id])} className={`px-4 py-2 rounded-full text-[10px] font-black border transition-all ${cats.includes(c.id) ? c.color : 'bg-brand-50 text-slate-300 border-transparent'}`}>{c.label}</button>
+              ))}
+            </div>
+
+            <textarea value={notes} onChange={e => setNotes(e.target.value)} className="w-full p-4 bg-brand-50 rounded-2xl border-none mb-8 text-sm font-bold text-brand-900 placeholder:text-slate-300" placeholder="Specific notes..." rows="2" />
+
+            <div className="flex gap-3">
+              {food && <button onClick={onDelete} className="flex-1 text-accent font-black text-sm uppercase tracking-widest">Delete</button>}
+              <button onClick={() => onSave({name, categories:cats, rating, notes})} className="flex-[3] bg-brand-500 text-white p-5 rounded-2xl font-black shadow-lg shadow-brand-100 active:scale-95 transition-all">Save Food</button>
+            </div>
+          </div>
+        </Modal>
+      );
+    }
+
+    function MealPlannerView({ foods, plans, combos, dispatch }) {
+      const [selDate, setSelDate] = useState(today());
+      const [picker, setPicker] = useState(null);
+      const [review, setReview] = useState(null);
+      const change = (o) => { let d = new Date(selDate + 'T00:00:00'); d.setDate(d.getDate() + o); setSelDate(d.toISOString().split('T')[0]); };
+      return (
+        <div className="animate-in pb-24">
+          <div className="flex items-center justify-between mb-6 bg-white p-4 rounded-[2rem] border-b-2 border-slate-100 sticky top-0 z-30">
+            <button onClick={() => change(-1)} className="w-10 h-10 bg-brand-50 text-brand-500 rounded-full font-black">←</button>
+            <div className="text-center"><p className="font-black text-lg text-brand-900">{selDate === today() ? 'Today' : formatDateShort(selDate)}</p><p className="text-[9px] font-black text-neutral uppercase tracking-widest">{new Date(selDate + 'T00:00:00').toLocaleDateString('en-US', {weekday:'long'})}</p></div>
+            <button onClick={() => change(1)} className="w-10 h-10 bg-brand-50 text-brand-500 rounded-full font-black">→</button>
+          </div>
+          <div className="space-y-4">
+            {MEALS.map(m => {
+              const p = plans.find(p => p.date === selDate && p.meal === m);
+              const pf = p?.foodIds.map(id => foods.find(f => f.id === id)).filter(Boolean) || [];
+              const covered = new Set(pf.flatMap(f => f.categories));
+              return (
+                <div key={m} onClick={() => pf.length ? setReview({date:selDate, meal:m}) : setPicker({date:selDate, meal:m})} className="bg-white p-6 rounded-[2rem] border shadow-sm active:scale-[0.98] transition-all">
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-black text-xl capitalize text-brand-900">{m}</h3>
+                    <div className="flex gap-0.5">{BALANCE_CATEGORIES.map(c => <span key={c} className={`text-[8px] px-1 rounded font-black ${covered.has(c) ? 'bg-green-100 text-green-700' : 'bg-red-50 text-red-100'}`}>{c[0].toUpperCase()}</span>)}</div>
+                  </div>
+                  {pf.length ? <div className="space-y-2">{pf.map(f => <div key={f.id} className="flex items-center gap-2 bg-brand-50/50 p-2.5 rounded-xl text-sm font-bold text-brand-900"><StockIndicator stock={f.stock} compact /> {f.name} <RatingDisplay rating={f.rating} compact /></div>)}</div> : <p className="text-[10px] text-slate-200 border-2 border-dashed border-slate-50 rounded-2xl py-6 text-center font-black uppercase tracking-widest">+ Add Food</p>}
+                </div>
+              );
+            })}
+          </div>
+          {picker && <FoodPickerModal date={picker.date} meal={picker.meal} foods={foods} combos={combos} plans={plans} dispatch={dispatch} onClose={() => setPicker(null)} />}
+          {review && <MealReviewModal date={review.date} meal={review.meal} plan={plans.find(p => p.date === review.date && p.meal === review.meal)} foods={foods} dispatch={dispatch} onAddMore={() => { setPicker(review); setReview(null); }} onClose={() => setReview(null)} />}
+        </div>
+      );
+    }
+
+    function FoodPickerModal({ date, meal, foods, combos, plans, dispatch, onClose }) {
+      const [tab, setTab] = useState('foods');
+      const [search, setSearch] = useState('');
+      const curIds = plans.find(p => p.date === date && p.meal === meal)?.foodIds || [];
+      const filtered = foods.filter(f => f.name.toLowerCase().includes(search.toLowerCase())).sort((a,b)=>a.name.localeCompare(b.name));
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-8">
+            <h2 className="text-2xl font-black mb-4 capitalize text-brand-900">Add to {meal}</h2>
+            <div className="flex gap-1 p-1 bg-gray-100 rounded-2xl mb-6">
+              <button onClick={() => setTab('foods')} className={`flex-1 py-2 text-xs font-black rounded-xl ${tab === 'foods' ? 'bg-white shadow text-brand-900' : 'text-gray-400'}`}>Pantry</button>
+              <button onClick={() => setTab('combos')} className={`flex-1 py-2 text-xs font-black rounded-xl ${tab === 'combos' ? 'bg-white shadow text-brand-900' : 'text-gray-400'}`}>Combos</button>
+            </div>
+            {tab === 'foods' ? (
+              <>
+                <input type="text" placeholder="Filter..." value={search} onChange={e => setSearch(e.target.value)} className="w-full p-3 bg-brand-50 rounded-xl border-none mb-4 outline-none font-bold text-brand-900" />
+                <div className="space-y-2 max-h-60 overflow-y-auto no-scrollbar">
+                  {filtered.map(f => {
+                    const sel = curIds.includes(f.id);
+                    return <button key={f.id} onClick={() => dispatch({type:'TOGGLE_FOOD_IN_MEAL', date, meal, foodId:f.id})} className={`w-full p-4 rounded-2xl border flex justify-between items-center transition-all ${sel ? 'bg-brand-100 border-brand-500 text-brand-900' : 'bg-white border-gray-100'}`}><span className="font-bold">{f.name}</span><StockIndicator stock={f.stock} compact /></button>;
+                  })}
+                </div>
+              </>
+            ) : <div className="space-y-2">{combos.map(c => <button key={c.id} onClick={() => { dispatch({type:'APPLY_COMBO', date, meal, foodIds:c.foodIds}); onClose(); }} className="w-full p-4 bg-brand-50 rounded-2xl text-left border border-brand-100 active:scale-95"><p className="font-black text-sm text-brand-900">{c.name}</p><p className="text-[10px] font-bold text-neutral uppercase tracking-widest">{c.foodIds.length} items</p></button>)}</div>}
+            <button onClick={onClose} className="w-full mt-8 py-5 bg-brand-900 text-white rounded-3xl font-black shadow-xl">Done</button>
+          </div>
+        </Modal>
+      );
+    }
+
+    function MealReviewModal({ date, meal, plan, foods, dispatch, onAddMore, onClose }) {
+      const pf = plan?.foodIds.map(id => foods.find(f => f.id === id)).filter(Boolean) || [];
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-8">
+            <div className="flex justify-between items-start mb-6"><h2 className="text-2xl font-black capitalize text-brand-900">{meal}</h2><button onClick={() => { const n = prompt("Combo Name?"); if(n) dispatch({type:'SAVE_COMBO', name:n, foodIds:plan.foodIds}); }} className="text-[8px] font-black bg-brand-50 text-brand-500 px-3 py-1.5 rounded-full border border-brand-100 tracking-widest">SAVE COMBO</button></div>
+            <div className="space-y-3">{pf.map(f => (
+              <div key={f.id} className="p-5 bg-brand-50 rounded-[2rem] border border-brand-100 relative shadow-sm">
+                <p className="font-black text-brand-900 mb-4">{f.name}</p>
+                <div className="flex justify-between items-center">
+                  <button onClick={() => dispatch({type:'UPDATE_FOOD', id:f.id, updates:{stock:f.stock==='in'?'low':f.stock==='low'?'out':'in'}})} className="bg-white px-4 py-2.5 rounded-xl border border-brand-100 shadow-sm active:scale-95 transition-transform"><StockIndicator stock={f.stock} compact /><span className="text-[10px] font-black uppercase ml-2 text-neutral">Stock</span></button>
+                  <div className="flex gap-1">{RATINGS.map(r => <button key={r.id} onClick={() => dispatch({type:'UPDATE_FOOD', id:f.id, updates:{rating:f.rating===r.id?null:r.id}})} className={`text-3xl transition-all ${f.rating===r.id?'scale-110 shadow-lg p-1 bg-white rounded-lg':'opacity-20 grayscale'}`}>{r.emoji}</button>)}</div>
+                </div>
+                <button onClick={() => dispatch({type:'TOGGLE_FOOD_IN_MEAL', date, meal, foodId:f.id})} className="absolute top-5 right-5 text-neutral font-black text-xl">×</button>
+              </div>
+            ))}</div>
+            <button onClick={onAddMore} className="w-full mt-8 py-5 bg-brand-500 text-white rounded-3xl font-black shadow-xl shadow-brand-100">+ Add More</button>
+            <button onClick={onClose} className="w-full mt-2 py-3 text-neutral font-black uppercase tracking-widest text-[10px]">Close</button>
+          </div>
+        </Modal>
+      );
+    }
+
+    function App() {
+      const [state, dispatch] = useReducer(appReducer, null, () => ({
+        foods: JSON.parse(localStorage.getItem('mt_foods') || '[]'),
+        plans: JSON.parse(localStorage.getItem('mt_plans') || '[]'),
+        combos: JSON.parse(localStorage.getItem('mt_combos') || '[]'),
+        shoppingDismissed: JSON.parse(localStorage.getItem('mt_dismissed') || '[]'),
+        foodMemory: JSON.parse(localStorage.getItem('mt_memory') || '{}')
+      }));
+      const [tab, setTab] = useState('today');
+      const [showAdd, setShowAdd] = useState(false);
+
+      useEffect(() => {
+        localStorage.setItem('mt_foods', JSON.stringify(state.foods));
+        localStorage.setItem('mt_plans', JSON.stringify(state.plans));
+        localStorage.setItem('mt_combos', JSON.stringify(state.combos));
+        localStorage.setItem('mt_dismissed', JSON.stringify(state.shoppingDismissed));
+        localStorage.setItem('mt_memory', JSON.stringify(state.foodMemory));
+      }, [state]);
+
+      return (
+        <div className="min-h-screen bg-kitchen-50 flex flex-col pt-12">
+          <main className="flex-1 max-w-md mx-auto w-full p-6">
+            {tab === 'today' && <TodayView foods={state.foods} plans={state.plans} dispatch={dispatch} />}
+            {tab === 'pantry' && <PantryView foods={state.foods} dispatch={dispatch} />}
+            {tab === 'planner' && <MealPlannerView foods={state.foods} plans={state.plans} combos={state.combos} dispatch={dispatch} />}
+            {tab === 'shopping' && <ShoppingListView foods={state.foods} plans={state.plans} dismissed={state.shoppingDismissed} dispatch={dispatch} />}
+          </main>
+
+          {tab === 'pantry' && (
+            <button onClick={() => setShowAdd(true)} className="fixed bottom-24 right-8 w-16 h-16 bg-brand-500 text-white rounded-full shadow-2xl text-4xl font-black flex items-center justify-center active:scale-90 transition-transform z-40">＋</button>
+          )}
+
+          <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-lg border-t border-gray-100 flex justify-around p-3 pb-8 z-50">
+            {[
+              { id: 'today', icon: '🏠', label: 'Today' },
+              { id: 'pantry', icon: '🥫', label: 'Pantry' },
+              { id: 'planner', icon: '📅', label: 'Planner' },
+              { id: 'shopping', icon: '🛒', label: 'Shop' }
+            ].map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)} className={`flex flex-col items-center gap-1 transition-all ${tab === t.id ? 'scale-110' : 'opacity-30 grayscale'}`}>
+                <span className="text-2xl">{t.icon}</span>
+                <span className="text-[9px] font-black uppercase tracking-widest">{t.label}</span>
+              </button>
+            ))}
+          </nav>
+
+          {showAdd && <FoodFormModal onSave={(d) => { dispatch({type:'ADD_FOOD', ...d}); setShowAdd(false); }} onClose={() => setShowAdd(false)} />}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
