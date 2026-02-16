@@ -8,7 +8,7 @@
 // ==========================================================================
 
 // Cache version — bump this when you update the app to force a refresh
-const CACHE_VERSION = 'meal-tracker-v13.4';
+const CACHE_VERSION = 'meal-tracker-v14.5';
 ';
 
 // Files to pre-cache on install (the app shell)
