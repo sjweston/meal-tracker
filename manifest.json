@@ -1,24 +1,22 @@
 {
   "name": "Meal Tracker",
   "short_name": "Meals",
-  "description": "Track pantry foods, plan balanced weekly meals, and remember what your kid likes.",
-  "start_url": "./meal-tracker.html",
+  "start_url": ".",
   "display": "standalone",
-  "background_color": "#faf9f6",
-  "theme_color": "#16a34a",
-  "orientation": "any",
+  "background_color": "#f0f7f9",
+  "theme_color": "#167188",
   "icons": [
     {
-      "src": "icon-192.png",
+      "src": "./icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
-      "src": "icon-512.png",
+      "src": "./icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
     }
   ]
 }
