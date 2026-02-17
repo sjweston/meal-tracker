@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'meal-tracker-v16';
+const CACHE_VERSION = 'meal-tracker-v16.1';
 
 const APP_SHELL = [
   './',

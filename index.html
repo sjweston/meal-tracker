@@ -31,7 +31,7 @@
     .animate-in { animation: fadeIn 0.3s ease-out; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
     .no-scrollbar::-webkit-scrollbar { display: none; }
-    .food-card { transition: all 0.1s ease; }
+    .food-card { transition: all 0.1s ease; border-width: 2px; }
     .food-card:active { transform: scale(0.98); }
     .selected-card { border-color: #167188 !important; background-color: #daebf1 !important; }
   </style>
@@ -60,13 +60,17 @@
           const tx = e.target.result.transaction('appData', 'readonly');
           const req = tx.objectStore('appData').get(key);
           req.onsuccess = () => resolve(req.result || defaultValue);
+          req.onerror = () => resolve(defaultValue);
         };
       });
     };
 
     // --- Constants ---
     const generateId = () => Math.random().toString(36).substring(2, 15);
-    const today = () => new Date().toLocaleDateString('en-CA'); 
+    const getTodayStr = () => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
 
     const CATEGORIES = [
       { id: 'carb', label: 'Carb', color: 'bg-amber-100 text-amber-800 border-amber-300', aisle: 'Pantry' },
@@ -77,15 +81,15 @@
     ];
     const BALANCE_CATEGORIES = ['carb', 'protein', 'fruit', 'veggie'];
     const RATINGS = [
-      { id: 'loves', icon: 'ph-fill ph-heart', color: 'text-accent', label: 'Loves' },
-      { id: 'likes', icon: 'ph-fill ph-thumbs-up', color: 'text-brand-500', label: 'Likes' },
-      { id: 'neutral', icon: 'ph-fill ph-circle', color: 'text-neutral', label: 'Neutral' },
-      { id: 'dislikes', icon: 'ph-fill ph-thumbs-down', color: 'text-brand-900', label: 'Dislikes' },
+      { id: 'loves', icon: 'ph-fill ph-heart', color: 'text-accent', label: 'Loves', emoji: '❤️' },
+      { id: 'likes', icon: 'ph-fill ph-thumbs-up', color: 'text-brand-500', label: 'Likes', emoji: '👍' },
+      { id: 'neutral', icon: 'ph-fill ph-circle', color: 'text-neutral', label: 'Neutral', emoji: '😐' },
+      { id: 'dislikes', icon: 'ph-fill ph-thumbs-down', color: 'text-brand-900', label: 'Dislikes', emoji: '👎' },
     ];
     const STOCK_OPTIONS = [
-      { id: 'in', label: 'Available', icon: 'ph-bold ph-check-circle', color: 'text-brand-500', bg: 'bg-brand-50' },
-      { id: 'low', label: 'Low Stock', icon: 'ph-bold ph-warning-diamond', color: 'text-neutral', bg: 'bg-slate-100' },
-      { id: 'out', label: 'Out',      icon: 'ph-bold ph-prohibit', color: 'text-accent', bg: 'bg-red-50' },
+      { id: 'in', label: 'In', icon: 'ph-bold ph-check-circle', color: 'text-brand-500' },
+      { id: 'low', label: 'Low', icon: 'ph-bold ph-warning-diamond', color: 'text-neutral' },
+      { id: 'out', label: 'Out', icon: 'ph-bold ph-prohibit', color: 'text-accent' },
     ];
     const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
     const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -97,17 +101,17 @@
         case 'ADD_FOOD': {
           const name = action.name.trim();
           const mem = state.foodMemory?.[name.toLowerCase()] || {};
-          const food = { id: generateId(), name, categories: action.categories || mem.categories || [], stock: 'in', rating: action.rating || mem.rating || null, notes: action.notes || mem.notes || '', source: action.source || 'home', createdAt: today() };
+          const food = { id: generateId(), name, categories: action.categories || mem.categories || [], stock: 'in', rating: action.rating || mem.rating || null, notes: action.notes || mem.notes || '', source: action.source || 'home', createdAt: getTodayStr() };
           return { ...state, foods: [...state.foods, food] };
         }
         case 'BATCH_ADD': {
           let updatedFoods = [...state.foods];
-          let currentMemory = { ...state.foodMemory };
+          let updatedMemory = { ...state.foodMemory };
           action.names.forEach(n => {
             const clean = n.trim();
             if (!clean || updatedFoods.some(f => f.name.toLowerCase() === clean.toLowerCase())) return;
-            const mem = currentMemory[clean.toLowerCase()] || {};
-            const food = { id: generateId(), name: clean, categories: mem.categories || [], stock: 'in', rating: mem.rating || null, notes: mem.notes || '', source: 'home', createdAt: today() };
+            const mem = updatedMemory[clean.toLowerCase()] || {};
+            const food = { id: generateId(), name: clean, categories: mem.categories || [], stock: 'in', rating: mem.rating || null, notes: mem.notes || '', source: 'home', createdAt: getTodayStr() };
             updatedFoods.push(food);
           });
           return { ...state, foods: updatedFoods };
@@ -115,6 +119,7 @@
         case 'UPDATE_FOOD': {
           const foods = state.foods.map(f => f.id === action.id ? { ...f, ...action.updates } : f);
           const food = foods.find(f => f.id === action.id);
+          if (!food) return state;
           const memory = { ...state.foodMemory, [food.name.toLowerCase()]: { categories: food.categories, rating: food.rating, notes: food.notes } };
           return { ...state, foods, foodMemory: memory };
         }
@@ -133,13 +138,12 @@
         }
         case 'DISCOVER_FOOD': {
           const name = action.name.trim(); const foodId = generateId();
-          const newFood = { id: foodId, name, categories: [], stock: 'out', rating: action.rating, notes: '', source: 'outside', createdAt: today() };
-          const plan = state.plans.find(p => p.date === today() && p.meal === 'dinner');
-          const newPlans = plan ? state.plans.map(p => p.id === plan.id ? { ...p, foodIds: [...p.foodIds, foodId] } : p) : [...state.plans, { id: generateId(), date: today(), meal: 'dinner', foodIds: [foodId] }];
+          const newFood = { id: foodId, name, categories: [], stock: 'out', rating: action.rating, notes: '', source: 'outside', createdAt: getTodayStr() };
+          const plan = state.plans.find(p => p.date === getTodayStr() && p.meal === 'dinner');
+          const newPlans = plan ? state.plans.map(p => p.id === plan.id ? { ...p, foodIds: [...p.foodIds, foodId] } : p) : [...state.plans, { id: generateId(), date: getTodayStr(), meal: 'dinner', foodIds: [foodId] }];
           return { ...state, foods: [...state.foods, newFood], plans: newPlans };
         }
         case 'DISMISS_SHOPPING': return { ...state, shoppingDismissed: [...(state.shoppingDismissed || []), action.id] };
-        case 'SAVE_COMBO': return { ...state, combos: [...state.combos, { id: generateId(), name: action.name, foodIds: action.foodIds }] };
         case 'APPLY_COMBO': {
           let s = state; action.foodIds.forEach(fid => { s = appReducer(s, { type: 'TOGGLE_FOOD_IN_MEAL', date: action.date, meal: action.meal, foodId: fid }); });
           return s;
@@ -149,51 +153,57 @@
       }
     };
 
-    // --- UI Components ---
-    const Modal = ({ children, onClose }) => (
-      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-brand-900/60 p-4 animate-in" onClick={(e) => e.target === e.currentTarget && onClose()}>
-        <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-md max-h-[85vh] overflow-y-auto">{children}</div>
-      </div>
-    );
+    // --- Common Logic ---
+    const calculateExposures = (foodId, plans) => plans.filter(p => p.date <= getTodayStr() && p.foodIds.includes(foodId)).length;
     const RatingIcon = ({ rating, size = "sm" }) => {
       const r = RATINGS.find(rt => rt.id === rating);
       return r ? <i className={`${r.icon} ${r.color} ${size === 'lg' ? 'text-3xl' : 'text-lg'}`}></i> : null;
     };
-    const calculateExposures = (foodId, plans) => plans.filter(p => p.date <= today() && p.foodIds.includes(foodId)).length;
 
     // ==========================================================================
-    // MAIN VIEWS
+    // TODAY VIEW (Hardened against crashes)
     // ==========================================================================
 
-    function TodayView({ foods, plans, dispatch, setTab }) {
+    function TodayView({ foods, plans, dispatch, setQuickSort }) {
       const [review, setReview] = useState(false);
       const [restaurantMode, setRestaurantMode] = useState(false);
-      const [quickSort, setQuickSort] = useState(false);
+      
+      const tStr = getTodayStr();
+      const unrated = useMemo(() => {
+        const todaysPlannedIds = plans.filter(p => p.date === tStr).flatMap(p => p.foodIds);
+        return todaysPlannedIds.map(id => foods.find(f => f.id === id)).filter(f => f && !f.rating);
+      }, [plans, foods, tStr]);
 
-      const unrated = plans.filter(p => p.date === today()).flatMap(p => p.foodIds).map(id => foods.find(f => f.id === id)).filter(f => f && !f.rating);
-      const needsSortCount = foods.filter(f => f.categories.length === 0 || !f.rating).length;
+      const needsSortCount = useMemo(() => foods.filter(f => !f.categories?.length || !f.rating).length, [foods]);
 
       const streak = useMemo(() => {
         let count = 0; let d = new Date();
         while (true) {
-          const dStr = d.toLocaleDateString('en-CA');
+          const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
           const dayPlans = plans.filter(p => p.date === dStr && p.meal !== 'snack');
+          if (dayPlans.length === 0) break;
+
           const covered = new Set();
-          dayPlans.forEach(p => p.foodIds.forEach(fid => foods.find(f => f.id === fid)?.categories.forEach(c => covered.add(c))));
-          if (dayPlans.length > 0 && BALANCE_CATEGORIES.every(c => covered.has(c))) { count++; d.setDate(d.getDate() - 1); } else break;
+          dayPlans.forEach(p => p.foodIds.forEach(fid => {
+            const f = foods.find(x => x.id === fid);
+            f?.categories?.forEach(c => covered.add(c));
+          }));
+
+          if (BALANCE_CATEGORIES.every(c => covered.has(c))) {
+            count++;
+            d.setDate(d.getDate() - 1);
+          } else break;
         }
         return count;
       }, [plans, foods]);
 
-      if (quickSort) return <QuickSortView foods={foods} dispatch={dispatch} onClose={() => setQuickSort(false)} />;
-
       return (
         <div className="animate-in pb-24">
           <div className="bg-brand-500 rounded-[2.5rem] p-8 text-white shadow-xl mb-6 relative overflow-hidden">
-            <h2 className="text-5xl font-black mb-1">{streak} Days</h2>
-            <p className="text-brand-100 font-bold uppercase tracking-widest text-[10px] opacity-80 tracking-[0.2em]">Balanced Streak 🔥</p>
+            <h2 className="text-5xl font-black mb-1 tracking-tight">{streak} Days</h2>
+            <p className="text-brand-100 font-bold uppercase tracking-widest text-[10px] opacity-80">Balanced Streak 🔥</p>
             {needsSortCount > 0 && (
-              <button onClick={() => setQuickSort(true)} className="absolute top-6 right-6 w-10 h-10 bg-brand-900 rounded-full flex items-center justify-center shadow-lg active:scale-90 transition-all border border-brand-100/20">
+              <button onClick={() => setQuickSort(true)} className="absolute top-6 right-6 w-10 h-10 bg-brand-900 rounded-full flex items-center justify-center shadow-lg active:scale-90 border border-brand-100/20">
                 <i className="ph ph-lightning-fill text-white"></i>
                 <div className="absolute -top-1 -right-1 bg-accent text-[8px] font-black w-4 h-4 rounded-full flex items-center justify-center">{needsSortCount}</div>
               </button>
@@ -201,13 +211,19 @@
           </div>
 
           <div className="grid grid-cols-2 gap-4 mb-8">
-            <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100"><p className="text-3xl font-black text-brand-500">{foods.filter(f => calculateExposures(f.id, plans) >= 15).length}</p><p className="text-[10px] font-bold text-neutral uppercase tracking-tighter">Accepted Foods</p></div>
-            <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100"><p className="text-3xl font-black text-accent">{foods.filter(f => f.stock !== 'in' && f.rating !== 'dislikes' && f.source !== 'outside').length}</p><p className="text-[10px] font-bold text-neutral uppercase tracking-tighter">Shopping List</p></div>
+            <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100">
+              <p className="text-3xl font-black text-brand-500">{foods.filter(f => calculateExposures(f.id, plans) >= 15).length}</p>
+              <p className="text-[10px] font-bold text-neutral uppercase tracking-tighter">Accepted Foods</p>
+            </div>
+            <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100">
+              <p className="text-3xl font-black text-accent">{foods.filter(f => f.stock !== 'in' && f.rating !== 'dislikes' && f.source !== 'outside').length}</p>
+              <p className="text-[10px] font-bold text-neutral uppercase tracking-tighter">Shopping Items</p>
+            </div>
           </div>
 
           <div className="space-y-3">
              <button onClick={() => setRestaurantMode(true)} className="w-full bg-white border border-brand-100 p-6 rounded-[2rem] shadow-sm flex items-center justify-between active:scale-95 transition-all"><div className="text-left"><p className="text-lg font-black text-brand-900">Dining Out? 🍽️</p><p className="text-xs text-neutral font-bold opacity-60">Log a restaurant discovery</p></div><i className="ph ph-plus-circle text-brand-500 text-2xl"></i></button>
-             {unrated.length > 0 && (<button onClick={() => setReview(true)} className="w-full bg-brand-900 text-white p-7 rounded-[2.5rem] shadow-xl flex items-center justify-between active:scale-95 transition-all"><div className="text-left"><p className="text-xl font-black text-white">Preference Check 🍽️</p><p className="text-xs opacity-60 font-bold uppercase tracking-widest mt-1">Rate today's foods</p></div><i className="ph ph-arrow-circle-right text-white text-2xl"></i></button>)}
+             {unrated.length > 0 && (<button onClick={() => setReview(true)} className="w-full bg-brand-900 text-white p-7 rounded-[2.5rem] shadow-xl flex items-center justify-between active:scale-95 transition-all"><div className="text-left"><p className="text-xl font-black text-white">Preference Check 🍽️</p><p className="text-xs opacity-60 font-bold uppercase mt-1">Rate today's foods</p></div><i className="ph ph-arrow-circle-right text-white text-2xl"></i></button>)}
           </div>
 
           {restaurantMode && <DiscoveryModal onSave={(d) => { dispatch({type:'DISCOVER_FOOD', ...d}); setRestaurantMode(false); }} onClose={() => setRestaurantMode(false)} />}
@@ -216,30 +232,25 @@
       );
     }
 
-    function QuickSortView({ foods, dispatch, onClose }) {
-      const [index, setIndex] = useState(0);
-      const [tempCats, setTempCats] = useState([]);
-      const uncategorized = useMemo(() => foods.filter(f => f.categories.length === 0 || !f.rating), [foods]);
-      const current = uncategorized[index];
-      if (!current) return <div className="p-8 text-center"><i className="ph ph-check-circle text-6xl text-brand-500 mb-4 block"></i><h2 className="text-2xl font-black">All Sorted!</h2><button onClick={onClose} className="mt-6 text-brand-500 font-bold">Back Home</button></div>;
-      return (
-        <div className="p-4 flex flex-col h-full"><div className="flex justify-between mb-8"><h2 className="text-xl font-black">Quick Sort</h2><span>{index + 1}/{uncategorized.length}</span></div><div className="bg-white p-8 rounded-[3rem] shadow-xl flex-1 flex flex-col"><p className="text-3xl font-black text-center mb-10">{current.name}</p><div className="space-y-8"><div><p className="text-[10px] uppercase font-black text-center mb-4">Category</p><div className="grid grid-cols-3 gap-2">{CATEGORIES.map(c => (<button key={c.id} onClick={() => setTempCats(prev => prev.includes(c.id) ? prev.filter(x => x !== c.id) : [...prev, c.id])} className={`py-3 rounded-xl text-[10px] font-black border transition-all ${tempCats.includes(c.id) ? 'bg-brand-900 text-white border-brand-900' : 'bg-slate-50 border-transparent text-slate-400'}`}>{c.label}</button>))}</div></div><div><p className="text-[10px] uppercase font-black text-center mb-4">Preference</p><div className="flex justify-between">{RATINGS.map(r => (<button key={r.id} onClick={() => { dispatch({type:'UPDATE_FOOD', id:current.id, updates:{rating:r.id, categories:tempCats}}); setTempCats([]); setIndex(i => i + 1); }} className="w-16 h-16 bg-brand-50 rounded-2xl flex items-center justify-center transition-all"><i className={`${r.icon} ${r.color} text-3xl`}></i></button>))}</div></div></div><button onClick={() => setIndex(i => i + 1)} className="mt-auto py-4 text-neutral font-black">Skip</button></div><button onClick={onClose} className="mt-4 font-black">Exit</button></div>
-      );
-    }
+    // ==========================================================================
+    // LIST VIEW (Compact + Safety)
+    // ==========================================================================
 
     function ListView({ foods, plans, title, selectionIds, setSelectionIds, onEdit, dispatch, showBatch }) {
       const [search, setSearch] = useState('');
       const [batchMode, setBatchMode] = useState(false);
       const [input, setInput] = useState('');
+      
       const filtered = foods.filter(f => f.name.toLowerCase().includes(search.toLowerCase())).sort((a,b) => a.name.localeCompare(b.name));
       const inSelectionMode = selectionIds.length > 0;
+
       return (
         <div className="animate-in pb-40 space-y-1.5">
           <div className="flex justify-between items-center mb-6 px-1"><h2 className="text-3xl font-black text-brand-900 tracking-tight">{title}</h2><div className="flex gap-2">{showBatch && <button onClick={() => setBatchMode(true)} className="bg-brand-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg">Batch</button>}<button onClick={() => setSelectionIds(inSelectionMode ? [] : [filtered[0]?.id].filter(Boolean))} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase ${inSelectionMode ? 'bg-brand-900 text-white' : 'bg-white border text-brand-500'}`}>{inSelectionMode ? 'Cancel' : 'Select'}</button></div></div>
           <input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="w-full p-3 mb-4 rounded-2xl bg-white shadow-sm border-none font-bold text-sm outline-none" />
           {filtered.map(f => {
             const isSelected = selectionIds.includes(f.id);
-            return (<div key={f.id} onClick={() => inSelectionMode ? setSelectionIds(p => p.includes(f.id) ? p.filter(x => x !== f.id) : [...p, f.id]) : onEdit(f)} className={`food-card bg-white px-4 py-2.5 rounded-xl border border-transparent shadow-sm flex justify-between items-center ${isSelected ? 'selected-card border-brand-500 shadow-md scale-[0.98]' : 'border-b-slate-100'}`}><div className="flex items-center gap-3">{inSelectionMode && <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${isSelected ? 'bg-brand-500 border-brand-500' : 'bg-white border-slate-200'}`}>{isSelected && <i className="ph ph-check text-[10px] text-white"></i>}</div>}<div><p className="font-bold text-sm">{f.source === 'outside' && '🍽️ '}{f.name}</p><div className="flex gap-1 mt-0.5"><p className="text-[8px] uppercase font-black text-neutral opacity-50 tracking-tighter">Tries: {calculateExposures(f.id, plans)}</p>{f.stock === 'low' && <span className="text-[8px] font-black text-amber-500 ml-1">Low</span>}</div></div></div><RatingIcon rating={f.rating} /></div>);
+            return (<div key={f.id} onClick={() => inSelectionMode ? setSelectionIds(p => p.includes(f.id) ? p.filter(x => x !== f.id) : [...p, f.id]) : onEdit(f)} className={`food-card bg-white px-4 py-2.5 rounded-xl border border-transparent shadow-sm flex justify-between items-center ${isSelected ? 'selected-card border-brand-500 scale-[0.98]' : 'border-b-slate-100'}`}><div className="flex items-center gap-3">{inSelectionMode && <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${isSelected ? 'bg-brand-500 border-brand-500' : 'bg-white border-slate-200'}`}>{isSelected && <i className="ph ph-check text-[10px] text-white"></i>}</div>}<div><p className="font-bold text-sm">{f.source === 'outside' && '🍽️ '}{f.name}</p><div className="flex gap-1 mt-0.5"><p className="text-[8px] uppercase font-black text-neutral opacity-50 tracking-tighter">Tries: {calculateExposures(f.id, plans)}</p>{f.stock === 'low' && <span className="text-[8px] font-black text-amber-500 ml-1">Low</span>}</div></div></div><RatingIcon rating={f.rating} /></div>);
           })}
           {batchMode && <Modal onClose={() => setBatchMode(false)}><div className="p-8"><h2 className="text-2xl font-black mb-4">Batch Import</h2><textarea value={input} onChange={e => setInput(e.target.value)} className="w-full h-40 bg-brand-50 rounded-2xl p-4 outline-none border-none font-bold" placeholder="Pizza, Peas, Pasta..." /><div className="flex gap-2 mt-6"><button onClick={() => setBatchMode(false)} className="flex-1 font-bold text-neutral uppercase text-[10px]">Cancel</button><button onClick={() => { dispatch({type:'BATCH_ADD', names: input.split(/[,\n]/)}); setBatchMode(false); setInput(''); }} className="flex-[2] bg-brand-500 text-white py-4 rounded-2xl font-black shadow-lg">Import</button></div></div></Modal>}
           <BulkActionBar selectedIds={selectionIds} onClear={() => setSelectionIds([])} dispatch={dispatch} />
@@ -256,64 +267,17 @@
       );
     }
 
-    function App() {
-      const [state, dispatch] = useReducer(appReducer, { isLoaded: false, foods: [], plans: [], combos: [], shoppingDismissed: [], foodMemory: {} });
-      const [tab, setTab] = useState('today');
-      const [edit, setEdit] = useState(null);
-      const [pantrySelect, setPantrySelect] = useState([]);
-      const [libSelect, setLibSelect] = useState([]);
-
-      useEffect(() => {
-        const load = async () => {
-          const foods = await dbLoad('foods', []); const plans = await dbLoad('plans', []); const memory = await dbLoad('memory', {}); const dismissed = await dbLoad('dismissed', []);
-          dispatch({ type: 'HYDRATE', payload: { foods, plans, foodMemory: memory, shoppingDismissed: dismissed } });
-        };
-        load();
-      }, []);
-
-      useEffect(() => {
-        if (!state.isLoaded) return;
-        dbSave('foods', state.foods); dbSave('plans', state.plans); dbSave('memory', state.foodMemory); dbSave('dismissed', state.shoppingDismissed);
-      }, [state]);
-
-      if (!state.isLoaded) return <div className="flex h-screen items-center justify-center text-brand-500 font-black">LOADING...</div>;
-
-      return (
-        <div className="min-h-screen flex flex-col pt-8">
-          <main className="flex-1 max-w-md mx-auto w-full p-6">
-            {tab === 'today' && <TodayView foods={state.foods} plans={state.plans} dispatch={dispatch} setTab={setTab} />}
-            {tab === 'pantry' && <ListView foods={state.foods.filter(f => f.stock !== 'out' && f.source !== 'outside')} plans={state.plans} title="Pantry" searchPlaceholder="Search pantry..." selectionIds={pantrySelect} setSelectionIds={setPantrySelect} onEdit={setEdit} dispatch={dispatch} />}
-            {tab === 'library' && <ListView foods={state.foods} plans={state.plans} title="Library" searchPlaceholder="Search database..." selectionIds={libSelect} setSelectionIds={setLibSelect} onEdit={setEdit} dispatch={dispatch} showBatch />}
-            {tab === 'planner' && <MealPlannerView foods={state.foods} plans={state.plans} dispatch={dispatch} />}
-            {tab === 'shopping' && <ShoppingListView foods={state.foods} plans={state.plans} dismissed={state.shoppingDismissed} dispatch={dispatch} />}
-          </main>
-          <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t flex justify-around p-3 pb-8 z-50">
-            {[ {id:'today', i:'ph-house'}, {id:'pantry', i:'ph-package'}, {id:'library', i:'ph-books'}, {id:'planner', i:'ph-calendar-blank'}, {id:'shopping', i:'ph-shopping-cart'} ].map(t => (
-              <button key={t.id} onClick={() => setTab(t.id)} className={`flex flex-col items-center gap-1 transition-all ${tab === t.id ? 'scale-110 text-brand-500' : 'opacity-40 grayscale'}`}>
-                <i className={`${tab === t.id ? t.i + '-fill' : t.i} text-2xl`}></i>
-                <span className="text-[8px] font-black uppercase tracking-widest">{t.id}</span>
-              </button>
-            ))}
-          </nav>
-          {edit && <FoodFormModal food={edit} plans={state.plans} onSave={(d) => { dispatch({type:'UPDATE_FOOD', id:edit.id, updates:d}); setEdit(null); }} onDelete={() => { dispatch({type:'DELETE_FOOD', id:edit.id}); setEdit(null); }} onClose={() => setEdit(null)} />}
-        </div>
-      );
-    }
-
-    // --- (Keep DiscoveryModal, ReviewModal, FoodFormModal, MealPlannerView, ShoppingListView as defined in v20 but using corrected today() logic) ---
-    // Note: I am including the specific Plan/Shop logic to match the v20/v26 crossover requested.
+    // --- Planner Views ---
 
     function MealPlannerView({ foods, plans, dispatch }) {
       const [viewMode, setViewMode] = useState('daily');
-      const [date, setDate] = useState(today());
+      const [date, setDate] = useState(getTodayStr());
       const [picker, setPicker] = useState(null);
-      const shift = (o) => { let d = new Date(date + 'T00:00:00'); d.setDate(d.getDate() + o); setDate(d.toLocaleDateString('en-CA')); };
-      const getMondayDate = (dStr) => { const d = new Date(dStr + 'T00:00:00'); const day = d.getDay(); const diff = d.getDate() - day + (day === 0 ? -6 : 1); d.setDate(diff); return d; };
-      const weekDates = Array.from({length: 7}, (_, i) => { const d = getMondayDate(date); d.setDate(d.getDate() + i); return d.toLocaleDateString('en-CA'); });
-
+      const shift = (o) => { let d = new Date(date + 'T00:00:00'); d.setDate(d.getDate() + o); setDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`); };
+      
       return (
         <div className="animate-in pb-24 px-1">
-          <div className="bg-white p-4 rounded-3xl border border-slate-100 mb-4 sticky top-0 z-30 shadow-sm"><div className="flex justify-between items-center mb-4"><button onClick={() => shift(-1)} className="w-10 h-10 bg-brand-50 text-brand-500 rounded-full font-black flex items-center justify-center active:scale-90"><i className="ph-bold ph-caret-left"></i></button><div className="text-center font-black"><p className="text-lg text-brand-900">{date === today() ? 'Today' : date.split('-').slice(1).join('/')}</p><p className="text-[8px] uppercase tracking-[0.3em] text-neutral">{new Date(date+'T00:00:00').toLocaleDateString('en-US',{weekday:'long'})}</p></div><button onClick={() => shift(1)} className="w-10 h-10 bg-brand-50 text-brand-500 rounded-full font-black flex items-center justify-center active:scale-90"><i className="ph-bold ph-caret-right"></i></button></div><div className="flex gap-2 p-1 bg-brand-50 rounded-2xl"><button onClick={() => setViewMode('daily')} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${viewMode === 'daily' ? 'bg-white shadow text-brand-500' : 'opacity-40'}`}>Daily</button><button onClick={() => setViewMode('weekly')} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${viewMode === 'weekly' ? 'bg-white shadow text-brand-500' : 'opacity-40'}`}>Weekly</button></div></div>
+          <div className="bg-white p-4 rounded-3xl border border-slate-100 mb-4 sticky top-0 z-30 shadow-sm"><div className="flex justify-between items-center mb-4"><button onClick={() => shift(-1)} className="w-10 h-10 bg-brand-50 text-brand-500 rounded-full font-black flex items-center justify-center active:scale-90"><i className="ph ph-caret-left"></i></button><div className="text-center font-black"><p className="text-lg text-brand-900">{date === getTodayStr() ? 'Today' : date.split('-').slice(1).join('/')}</p><p className="text-[8px] uppercase tracking-[0.3em] text-neutral">{new Date(date+'T00:00:00').toLocaleDateString('en-US',{weekday:'long'})}</p></div><button onClick={() => shift(1)} className="w-10 h-10 bg-brand-50 text-brand-500 rounded-full font-black flex items-center justify-center active:scale-90"><i className="ph ph-caret-right"></i></button></div><div className="flex gap-2 p-1 bg-brand-50 rounded-2xl"><button onClick={() => setViewMode('daily')} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${viewMode === 'daily' ? 'bg-white shadow text-brand-500' : 'opacity-40'}`}>Daily</button><button onClick={() => setViewMode('weekly')} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${viewMode === 'weekly' ? 'bg-white shadow text-brand-500' : 'opacity-40'}`}>Weekly</button></div></div>
           {viewMode === 'daily' ? (
             <div className="space-y-4">{MEALS.map(m => {
               const p = plans.find(plan => plan.date === date && plan.meal === m);
@@ -323,17 +287,17 @@
             })}</div>
           ) : (
             <div className="bg-white rounded-[2rem] border overflow-hidden"><div className="overflow-x-auto no-scrollbar"><div className="min-w-[500px]">
-              <div className="grid grid-cols-[60px_repeat(7,1fr)] bg-slate-50 border-b"><div />{weekDates.map((d, i) => (<div key={d} className={`py-3 text-center ${d === today() ? 'bg-brand-500 text-white' : ''}`}><p className="text-[8px] font-black opacity-60">{DAY_LABELS[i]}</p><p className="text-xs font-black">{d.split('-')[2]}</p></div>))}</div>
-              {MEALS.map(meal => (<div key={meal} className="grid grid-cols-[60px_repeat(7,1fr)] border-b last:border-0"><div className="flex items-center justify-center p-2 text-[10px] font-black uppercase opacity-20">{meal[0]}</div>{weekDates.map(d => { const p = plans.find(plan => plan.date === d && plan.meal === meal); const cov = new Set(p?.foodIds.flatMap(id => foods.find(f => f.id === id)?.categories || [])); return (<div key={d} onClick={() => { setDate(d); setViewMode('daily'); }} className={`p-2 border-l flex flex-col items-center justify-center gap-1 ${d === date ? 'bg-brand-50/30' : ''}`}><div className="flex flex-wrap gap-0.5 justify-center">{BALANCE_CATEGORIES.map(c => (<div key={c} className={`w-2 h-2 rounded-full ${cov.has(c) ? 'bg-brand-500' : 'bg-slate-100'}`} />))}</div></div>); })}</div>))}
+              <div className="grid grid-cols-[60px_repeat(7,1fr)] bg-slate-50 border-b border-slate-100"><div />{Array.from({length:7}, (_,i) => { const d = new Date(date+'T00:00:00'); d.setDate(d.getDate()-d.getDay()+1+i); return d.toLocaleDateString('en-CA'); }).map((d, i) => (<div key={d} className={`py-3 text-center ${d === getTodayStr() ? 'bg-brand-500 text-white' : ''}`}><p className="text-[8px] font-black uppercase opacity-60">{DAY_LABELS[i]}</p><p className="text-xs font-black">{d.split('-')[2]}</p></div>))}</div>
+              {MEALS.map(meal => (<div key={meal} className="grid grid-cols-[60px_repeat(7,1fr)] border-b last:border-0"><div className="flex items-center justify-center p-2 text-[10px] font-black uppercase opacity-20">{meal[0]}</div>{Array.from({length:7}, (_,i) => { const d = new Date(date+'T00:00:00'); d.setDate(d.getDate()-d.getDay()+1+i); return d.toLocaleDateString('en-CA'); }).map(d => { const p = plans.find(plan => plan.date === d && plan.meal === meal); const cov = new Set(p?.foodIds.flatMap(id => foods.find(f => f.id === id)?.categories || [])); return (<div key={d} onClick={() => { setDate(d); setViewMode('daily'); }} className={`p-2 border-l flex flex-col items-center justify-center gap-1 ${d === date ? 'bg-brand-50/30' : ''}`}><div className="flex flex-wrap gap-0.5 justify-center">{BALANCE_CATEGORIES.map(c => (<div key={c} className={`w-2 h-2 rounded-full ${cov.has(c) ? 'bg-brand-500' : 'bg-slate-100'}`} />))}</div></div>); })}</div>))}
             </div></div></div>
           )}
-          {picker && <FoodPickerModal date={picker.date} meal={picker.meal} foods={foods} combos={JSON.parse(localStorage.getItem('mt_combos') || '[]')} current={plans.find(p => p.date === picker.date && p.meal === picker.meal)?.foodIds || []} dispatch={dispatch} onClose={() => setPicker(null)} />}
+          {picker && <FoodPickerModal date={picker.date} meal={picker.meal} foods={foods} current={plans.find(p => p.date === picker.date && p.meal === picker.meal)?.foodIds || []} dispatch={dispatch} onClose={() => setPicker(null)} />}
         </div>
       );
     }
 
     function ShoppingListView({ foods, plans, dismissed, dispatch }) {
-      const list = foods.filter(f => f.source !== 'outside' && f.rating !== 'dislikes' && !dismissed?.includes(f.id) && (f.stock === 'low' || f.stock === 'out' || plans.some(p => p.date >= today() && p.foodIds.includes(f.id) && f.stock === 'out')));
+      const list = foods.filter(f => f.source !== 'outside' && f.rating !== 'dislikes' && !dismissed?.includes(f.id) && (f.stock === 'low' || f.stock === 'out' || plans.some(p => p.date >= getTodayStr() && p.foodIds.includes(f.id) && f.stock === 'out')));
       const grouped = useMemo(() => {
         const groups = {}; list.forEach(f => { const aisle = CATEGORIES.find(c => f.categories.includes(c.id))?.aisle || 'General'; if (!groups[aisle]) groups[aisle] = []; groups[aisle].push(f); }); return groups;
       }, [list]);
@@ -350,6 +314,94 @@
       );
     }
 
+    // --- Global Modals ---
+
+    function FoodPickerModal({ date, meal, foods, current, dispatch, onClose }) {
+      const [tab, setTab] = useState('pantry');
+      const [search, setSearch] = useState('');
+      const [cat, setCat] = useState(null);
+      const covered = useMemo(() => { const s = new Set(); current.forEach(id => foods.find(f=>f.id===id)?.categories?.forEach(c=>s.add(c))); return s; }, [current, foods]);
+      const list = foods.filter(f => (tab === 'pantry' ? f.stock !== 'out' && f.source !== 'outside' : true) && f.name.toLowerCase().includes(search.toLowerCase()) && (!cat || f.categories?.includes(cat))).sort((a,b)=>a.name.localeCompare(b.name));
+      return (
+        <Modal onClose={onClose}><div className="p-6"><h2 className="text-2xl font-black mb-4 text-brand-900 capitalize">Add to {meal}</h2><input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="w-full bg-brand-50 p-4 rounded-2xl outline-none font-bold text-brand-900 mb-4" /><div className="flex gap-2 overflow-x-auto no-scrollbar pb-4"><button onClick={() => setCat(null)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase ${!cat ? 'bg-brand-900 text-white' : 'bg-white border text-neutral'}`}>All</button>{CATEGORIES.map(c => (<button key={c.id} onClick={() => setCat(cat === c.id ? null : c.id)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase flex items-center gap-1.5 ${cat === c.id ? 'bg-brand-900 text-white' : 'bg-white border text-neutral'}`}>{covered.has(c.id) && <div className="w-1.5 h-1.5 rounded-full bg-brand-500" />} {c.label}</button>))}</div><div className="flex gap-1 p-1 bg-gray-100 rounded-2xl mb-4">{['pantry', 'library'].map(t => (<button key={t} onClick={() => setTab(t)} className={`flex-1 py-2 text-[10px] uppercase font-black rounded-xl ${tab === t ? 'bg-white shadow text-brand-900' : 'text-gray-400'}`}>{t}</button>))}</div><div className="space-y-2 max-h-64 overflow-y-auto no-scrollbar">{list.map(f => { const sel = current.includes(f.id); return (<button key={f.id} onClick={() => dispatch({type:'TOGGLE_FOOD_IN_MEAL', date, meal, foodId:f.id})} className={`w-full p-4 rounded-2xl border flex justify-between items-center transition-all active:scale-95 ${sel ? 'bg-brand-100 border-brand-500 text-brand-900' : 'bg-white border-slate-100'}`}><span className="font-bold">{f.name}</span><RatingIcon rating={f.rating} /></button>); })}</div><button onClick={onClose} className="w-full mt-6 py-5 bg-brand-900 text-white rounded-3xl font-black uppercase shadow-xl">Done</button></div></Modal>
+      );
+    }
+
+    function DiscoveryModal({ onSave, onClose }) {
+      const [name, setName] = useState('');
+      const [rating, setRating] = useState(null);
+      return (
+        <Modal onClose={onClose}><div className="p-8"><h2 className="text-2xl font-black mb-1 text-brand-900 tracking-tight">New Discovery</h2><p className="text-[10px] font-black text-neutral uppercase mb-6 tracking-widest opacity-60">Log an Outside meal</p><div className="space-y-6"><input autoFocus type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Food Name..." className="w-full p-4 bg-brand-50 rounded-2xl border-none font-bold text-brand-900 outline-none" /><div className="flex justify-between gap-2">{RATINGS.map(r => (<button key={r.id} onClick={() => setRating(r.id)} className={`flex-1 aspect-square rounded-2xl transition-all flex items-center justify-center ${rating === r.id ? 'bg-brand-100 ring-2 ring-brand-500 shadow-inner' : 'bg-brand-50 opacity-20'}`}><i className={`${r.icon} ${r.color} text-3xl`}></i></button>))}</div><button onClick={() => name && onSave({name, rating})} className="w-full bg-brand-500 text-white p-5 rounded-3xl font-black shadow-lg uppercase tracking-widest">Add to Plan</button></div></div></Modal>
+      );
+    }
+
+    function ReviewModal({ unrated, onSave, onClose }) {
+      return (
+        <Modal onClose={onClose}><div className="p-8"><h2 className="text-2xl font-black mb-6 text-center text-brand-900">Today's Feedback</h2><div className="space-y-4">{unrated.map(f => (<div key={f.id} className="text-center p-6 bg-brand-50 rounded-[2.5rem] border border-brand-100"><p className="font-black text-xl mb-6 text-brand-900 tracking-tight">{f.name}</p><div className="flex justify-between gap-2 px-1">{RATINGS.map(r => (<button key={r.id} onClick={() => onSave(f.id, r.id)} className="flex flex-col items-center gap-2 flex-1"><div className="w-full aspect-square bg-white rounded-2xl shadow-sm flex items-center justify-center border border-brand-100"><i className={`${r.icon} ${r.color} text-3xl`}></i></div><span className="text-[9px] font-black uppercase text-neutral opacity-60">{r.label}</span></button>))}</div></div>))}</div><button onClick={onClose} className="w-full mt-8 py-4 font-black text-neutral uppercase tracking-widest text-[10px]">Finish Later</button></div></Modal>
+      );
+    }
+
+    function FoodFormModal({ food, plans, onSave, onDelete, onClose }) {
+      const [name, setName] = useState(food?.name || '');
+      const [rating, setRating] = useState(food?.rating || null);
+      const [stock, setStock] = useState(food?.stock || 'in');
+      const [source, setSource] = useState(food?.source || 'home');
+      const [cats, setCats] = useState(food?.categories || []);
+      const expCount = food ? calculateExposures(food.id, plans) : 0;
+      return (<Modal onClose={onClose}><div className="p-8"><h2 className="text-2xl font-black mb-2 text-brand-900">{food ? 'Edit' : 'New'} Food</h2><div className="mb-6"><div className="flex justify-between text-[9px] font-black uppercase text-neutral mb-1 opacity-60 tracking-widest"><span>Exposure Level</span><span>{expCount}/15 Tries</span></div><div className="w-full h-2 bg-brand-50 rounded-full overflow-hidden shadow-inner"><div className="h-full bg-brand-500 transition-all duration-1000" style={{width: `${Math.min((expCount/15)*100, 100)}%`}}></div></div></div><input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full p-4 bg-brand-50 rounded-2xl border-none mb-6 font-bold text-brand-900 outline-none" /><div className="flex gap-2 mb-8">{[{id:'home', icon:'ph-house', label:'Home'},{id:'outside', icon:'ph-map-pin', label:'Outside'}].map(s => (<button key={s.id} onClick={() => setSource(s.id)} className={`flex-1 py-3 rounded-xl font-black text-[10px] border flex items-center justify-center gap-2 transition-all ${source === s.id ? 'bg-brand-500 text-white border-brand-500 shadow-sm' : 'bg-brand-50 border-transparent text-neutral opacity-40'}`}><i className={`ph-bold ${s.icon}`}></i> {s.label}</button>))}</div><p className="text-[10px] font-black text-neutral mb-3 uppercase tracking-widest opacity-60 tracking-[0.2em]">Son's Preference</p><div className="flex justify-between gap-2 mb-8">{RATINGS.map(r => (<button key={r.id} onClick={() => setRating(rating === r.id ? null : r.id)} className={`flex-1 aspect-square rounded-2xl transition-all flex items-center justify-center ${rating === r.id ? 'bg-brand-100 ring-2 ring-brand-500 shadow-sm' : 'bg-brand-50 opacity-20 grayscale'}`}><i className={`${r.icon} ${r.color} text-3xl`}></i></button>))}</div>{source === 'home' && (<><p className="text-[10px] font-black text-neutral mb-3 uppercase tracking-widest opacity-60 tracking-[0.2em]">Stock</p><div className="flex gap-2 mb-8">{STOCK_OPTIONS.map(o => (<button key={o.id} onClick={() => setStock(o.id)} className={`flex-1 py-3 rounded-xl font-black text-[9px] border flex flex-col items-center gap-1 transition-all ${stock === o.id ? o.bg + ' ' + o.color + ' border-current' : 'bg-brand-50 border-transparent opacity-20'}`}><i className={`${o.icon} text-lg`}></i> {o.id.toUpperCase()}</button>))}</div></>)}<p className="text-[10px] font-black text-neutral mb-3 uppercase tracking-widest opacity-60">Categories</p><div className="flex flex-wrap gap-2 mb-10">{CATEGORIES.map(c => (<button key={c.id} onClick={() => setCats(cats.includes(c.id) ? cats.filter(x => x !== c.id) : [...cats, c.id])} className={`px-4 py-2 rounded-full text-[10px] font-black border transition-all ${cats.includes(c.id) ? c.color : 'bg-brand-50 text-neutral/40 border-transparent'}`}>{c.label}</button>))}</div><div className="flex gap-3">{food && <button onClick={() => { if(confirm('Delete?')) onDelete(); }} className="flex-1 text-accent font-black text-xs uppercase tracking-widest">Delete</button>}<button onClick={() => onSave({name, rating, stock, source, categories: cats})} className="flex-[3] bg-brand-500 text-white p-5 rounded-3xl font-black shadow-lg uppercase tracking-widest active:scale-95">Save</button></div></div></Modal>);
+    }
+
+    // ==========================================================================
+    // ROOT APP
+    // ==========================================================================
+
+    function App() {
+      const [state, dispatch] = useReducer(appReducer, { isLoaded: false, foods: [], plans: [], combos: [], shoppingDismissed: [], foodMemory: {} });
+      const [tab, setTab] = useState('today');
+      const [edit, setEdit] = useState(null);
+      const [pantrySelect, setPantrySelect] = useState([]);
+      const [libSelect, setLibSelect] = useState([]);
+      const [quickSort, setQuickSort] = useState(false);
+
+      useEffect(() => {
+        const load = async () => {
+          const foods = await dbLoad('foods', []); const plans = await dbLoad('plans', []); const memory = await dbLoad('memory', {}); const dismissed = await dbLoad('dismissed', []);
+          dispatch({ type: 'HYDRATE', payload: { foods, plans, foodMemory: memory, shoppingDismissed: dismissed } });
+        };
+        load();
+      }, []);
+
+      useEffect(() => {
+        if (!state.isLoaded) return;
+        dbSave('foods', state.foods); dbSave('plans', state.plans); dbSave('memory', state.foodMemory); dbSave('dismissed', state.shoppingDismissed);
+      }, [state]);
+
+      if (!state.isLoaded) return <div className="flex h-screen items-center justify-center text-brand-500 font-black animate-pulse uppercase tracking-[0.5em]">Loading</div>;
+
+      return (
+        <div className="min-h-screen flex flex-col pt-8">
+          <main className="flex-1 max-w-md mx-auto w-full p-6">
+            {tab === 'today' && <TodayView foods={state.foods} plans={state.plans} dispatch={dispatch} setQuickSort={setQuickSort} />}
+            {tab === 'pantry' && <ListView foods={state.foods.filter(f => f.stock !== 'out' && f.source !== 'outside')} plans={state.plans} title="Pantry" selectionIds={pantrySelect} setSelectionIds={setPantrySelect} onEdit={setEdit} dispatch={dispatch} />}
+            {tab === 'library' && <ListView foods={state.foods} plans={state.plans} title="Library" selectionIds={libSelect} setSelectionIds={setLibSelect} onEdit={setEdit} dispatch={dispatch} showBatch />}
+            {tab === 'planner' && <MealPlannerView foods={state.foods} plans={state.plans} dispatch={dispatch} />}
+            {tab === 'shopping' && <ShoppingListView foods={state.foods} plans={state.plans} dismissed={state.shoppingDismissed} dispatch={dispatch} />}
+          </main>
+          
+          <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-slate-100 flex justify-around p-3 pb-8 z-50">
+            {[ {id:'today', i:'ph-house'}, {id:'pantry', i:'ph-package'}, {id:'library', i:'ph-books'}, {id:'planner', i:'ph-calendar-blank'}, {id:'shopping', i:'ph-shopping-cart'} ].map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)} className={`flex flex-col items-center gap-1 transition-all ${tab === t.id ? 'scale-110 text-brand-500' : 'opacity-40 grayscale'}`}>
+                <i className={`${tab === t.id ? t.i + '-fill' : t.i} text-2xl`}></i>
+                <span className="text-[9px] font-black uppercase tracking-widest">{t.id}</span>
+              </button>
+            ))}
+          </nav>
+
+          {quickSort && <Modal onClose={() => setQuickSort(false)}><QuickSortView foods={state.foods} dispatch={dispatch} onClose={() => setQuickSort(false)} /></Modal>}
+          {edit && <FoodFormModal food={edit} plans={state.plans} onSave={(d) => { dispatch({type:'UPDATE_FOOD', id:edit.id, updates:d}); setEdit(null); }} onDelete={() => { dispatch({type:'DELETE_FOOD', id:edit.id}); setEdit(null); }} onClose={() => setEdit(null)} />}
+        </div>
+      );
+    }
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
   </script>
