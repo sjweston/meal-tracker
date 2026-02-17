@@ -1,12 +1,15 @@
-const CACHE_VERSION = 'meal-tracker-v16.3.1';
+// Cache version — bump this when deploying changes so the SW picks up new files
+const CACHE_VERSION = 'meal-tracker-v17.0.0';
 
+// App shell files to pre-cache on install.
+// Uses absolute paths matching GitHub Pages deployment at /meal-tracker/
 const APP_SHELL = [
-  './',
-  './index.html',
-  './manifest.json',
-  './apple-icon-v1.png',
-  './icon-192.png',
-  './icon-512.png',
+  '/meal-tracker/',
+  '/meal-tracker/index.html',
+  '/meal-tracker/manifest.json',
+  '/meal-tracker/apple-touch-icon.png',
+  '/meal-tracker/icon-192.png',
+  '/meal-tracker/icon-512.png',
 ];
 
 const CDN_URLS = [
