@@ -524,6 +524,7 @@
     // FoodFormModal: Edit a single food's details. Now shows computed preference
     // score and last 5 servings instead of a manual rating selector.
     function FoodFormModal({ food, plans, servings, onSave, onDelete, onClose }) {
+      const [name, setName] = useState(food.name || '');
       const [cats, setCats] = useState(food.categories || []);
       const [stock, setStock] = useState(food.stock || 'in');
       const [notes, setNotes] = useState(food.notes || '');
@@ -539,8 +540,10 @@
       return (
         <Modal onClose={onClose}>
           <div className="p-8">
-            {/* Header with food name and source badge */}
-            <h2 className="text-2xl font-black text-brand-900 mb-1">{food.name}</h2>
+            {/* Editable food name */}
+            <input type="text" value={name} onChange={e => setName(e.target.value)}
+              className="text-2xl font-black text-brand-900 mb-1 w-full bg-transparent outline-none border-b-2 border-transparent focus:border-brand-500 transition-colors"
+              placeholder="Food name..." />
             {food.source === 'outside' && (
               <p className="text-[10px] font-bold text-neutral uppercase tracking-widest mb-4">Restaurant Discovery</p>
             )}
@@ -625,8 +628,8 @@
               placeholder="Notes..." rows={2}
               className="w-full p-4 bg-brand-50 rounded-2xl outline-none font-bold text-sm mb-6" />
 
-            {/* Action buttons — no longer saves a rating */}
-            <button onClick={() => onSave({ categories: cats, stock, notes })}
+            {/* Action buttons — saves name, categories, stock, and notes */}
+            <button onClick={() => onSave({ name: name.trim() || food.name, categories: cats, stock, notes })}
               className="w-full bg-brand-500 text-white py-5 rounded-3xl font-black uppercase shadow-xl mb-3">Save Changes</button>
 
             {/* Delete with confirmation guard */}
