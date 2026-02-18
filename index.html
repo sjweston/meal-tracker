@@ -551,7 +551,7 @@
             </p>
             <div className="absolute top-6 right-6 flex gap-2">
               <button onClick={() => setShowData(true)} className="w-10 h-10 bg-brand-900/60 rounded-full flex items-center justify-center shadow-lg active:scale-90"><i className="ph ph-gear"></i></button>
-              <button onClick={() => setQuickSort(true)} className="w-10 h-10 bg-brand-900 rounded-full flex items-center justify-center shadow-lg active:scale-90"><i className="ph ph-lightning-fill"></i></button>
+              <button onClick={() => setQuickSort(true)} className="w-10 h-10 bg-brand-900 rounded-full flex items-center justify-center shadow-lg active:scale-90"><i className="ph-fill ph-lightning"></i></button>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4 mb-6">
@@ -1274,11 +1274,13 @@
     // QuickSortView: Card stack for rapidly categorizing foods.
     // Now only handles categories (ratings are computed from servings).
     function QuickSortView({ foods, dispatch, onClose }) {
-      // Only queue foods that are missing categories
-      const queue = useMemo(() =>
+      // Snapshot the queue ONCE on mount so it doesn't shrink as we categorize foods.
+      // Without this, the useMemo recomputes on every dispatch (because foods changes),
+      // removing the food we just categorized — so the list shrinks while index grows
+      // and we hit the end at roughly the halfway mark.
+      const [queue] = useState(() =>
         foods.filter(f => (f.categories?.length === 0))
-          .sort((a, b) => a.name.localeCompare(b.name)),
-        [foods]
+          .sort((a, b) => a.name.localeCompare(b.name))
       );
       const [index, setIndex] = useState(0);
       const current = queue[index];
