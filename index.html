@@ -106,6 +106,9 @@
     const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
     const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+    // Emoji options for child avatars — quick visual ID in the UI
+    const CHILD_EMOJIS = ['🦊', '🐸', '🐻', '🐰', '🦁', '🐱', '🐶', '🦄', '🐼', '🐨', '🦋', '🌟'];
+
     // --- Preference Score Helpers ---
 
     // Compute a preference score for a food based on its serving history.
@@ -142,6 +145,12 @@
         .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id))
         .slice(0, count);
     };
+
+    // Filter servings to only those belonging to a specific child
+    const childServings = (servings, childId) => (servings || []).filter(s => s.childId === childId);
+
+    // Filter plans to only those belonging to a specific child
+    const childPlans = (plans, childId) => (plans || []).filter(p => p.childId === childId);
 
     // --- Reducer ---
     const appReducer = (state, action) => {
@@ -195,37 +204,55 @@
 
         case 'DELETE_FOODS': return { ...state, foods: state.foods.filter(f => !action.ids.includes(f.id)) };
 
+        // TOGGLE_FOOD_IN_MEAL now requires a childId.
+        // When sameMealDefault is on, the UI dispatches this once per child.
         case 'TOGGLE_FOOD_IN_MEAL': {
-          const plan = state.plans.find(p => p.date === action.date && p.meal === action.meal);
+          const cid = action.childId;
+          const plan = state.plans.find(p => p.date === action.date && p.meal === action.meal && p.childId === cid);
           if (!plan?.foodIds.includes(action.foodId)) {
             if (plan) return { ...state, plans: state.plans.map(p => p.id === plan.id ? { ...p, foodIds: [...p.foodIds, action.foodId] } : p) };
-            return { ...state, plans: [...state.plans, { id: generateId(), date: action.date, meal: action.meal, foodIds: [action.foodId] }] };
+            return { ...state, plans: [...state.plans, { id: generateId(), date: action.date, meal: action.meal, childId: cid, foodIds: [action.foodId] }] };
           }
-          return { ...state, plans: state.plans.map(p => (p.date === action.date && p.meal === action.meal) ? { ...p, foodIds: p.foodIds.filter(id => id !== action.foodId) } : p).filter(p => p.foodIds.length > 0) };
+          return { ...state, plans: state.plans.map(p => (p.date === action.date && p.meal === action.meal && p.childId === cid) ? { ...p, foodIds: p.foodIds.filter(id => id !== action.foodId) } : p).filter(p => p.foodIds.length > 0) };
         }
 
-        // Restaurant discovery: creates the food AND logs an initial serving
+        // Restaurant discovery: creates the food AND logs an initial serving.
+        // Now creates plan+serving for active child (or all children if sameMealDefault).
         case 'DISCOVER_FOOD': {
           const name = action.name.trim();
           const foodId = generateId();
           const newFood = { id: foodId, name, categories: [], stock: 'out', notes: '', source: 'outside', createdAt: getTodayStr() };
-          // Add to today's dinner plan
-          const plan = state.plans.find(p => p.date === getTodayStr() && p.meal === 'dinner');
-          const newPlans = plan
-            ? state.plans.map(p => p.id === plan.id ? { ...p, foodIds: [...p.foodIds, foodId] } : p)
-            : [...state.plans, { id: generateId(), date: getTodayStr(), meal: 'dinner', foodIds: [foodId] }];
-          // Log the initial eating event if an eaten value was provided
-          const newServings = action.eaten
-            ? [...state.servings, { id: generateId(), foodId, date: getTodayStr(), meal: 'dinner', eaten: action.eaten }]
-            : state.servings;
+          // Determine which children get this discovery
+          const targetChildren = action.childIds || [action.childId || state.children?.[0]?.id];
+          let newPlans = [...state.plans];
+          let newServings = [...state.servings];
+          targetChildren.forEach(cid => {
+            // Add to today's dinner plan for each target child
+            const plan = newPlans.find(p => p.date === getTodayStr() && p.meal === 'dinner' && p.childId === cid);
+            if (plan) {
+              newPlans = newPlans.map(p => p.id === plan.id ? { ...p, foodIds: [...p.foodIds, foodId] } : p);
+            } else {
+              newPlans.push({ id: generateId(), date: getTodayStr(), meal: 'dinner', childId: cid, foodIds: [foodId] });
+            }
+            // Log the initial eating event if an eaten value was provided
+            if (action.eaten) {
+              newServings.push({ id: generateId(), foodId, date: getTodayStr(), meal: 'dinner', childId: cid, eaten: action.eaten });
+            }
+          });
           return { ...state, foods: [...state.foods, newFood], plans: newPlans, servings: newServings };
         }
 
         case 'SAVE_COMBO': return { ...state, combos: [...state.combos, { id: generateId(), name: action.name, foodIds: action.foodIds }] };
 
+        // APPLY_COMBO: applies a combo meal for a specific child (or all children if sameMealDefault)
         case 'APPLY_COMBO': {
           let s = state;
-          action.foodIds.forEach(fid => { s = appReducer(s, { type: 'TOGGLE_FOOD_IN_MEAL', date: action.date, meal: action.meal, foodId: fid }); });
+          const targetChildren = action.childIds || [action.childId];
+          targetChildren.forEach(cid => {
+            action.foodIds.forEach(fid => {
+              s = appReducer(s, { type: 'TOGGLE_FOOD_IN_MEAL', date: action.date, meal: action.meal, childId: cid, foodId: fid });
+            });
+          });
           return s;
         }
 
@@ -277,19 +304,52 @@
           return { ...state, foods: updatedFoods, servings: updatedServings, plans: updatedPlans, combos: updatedCombos };
         }
 
-        // Log a single serving (e.g., from discovery modal)
+        // Log a single serving — now requires childId
         case 'LOG_SERVING': {
-          return { ...state, servings: [...state.servings, { id: generateId(), foodId: action.foodId, date: action.date, meal: action.meal, eaten: action.eaten }] };
+          return { ...state, servings: [...state.servings, { id: generateId(), foodId: action.foodId, date: action.date, meal: action.meal, childId: action.childId, eaten: action.eaten }] };
         }
 
         // Log a batch of servings at once (from the meal check-in flow)
-        // action.entries is an array of { foodId, date, meal, eaten }
+        // action.entries is an array of { foodId, date, meal, childId, eaten }
         case 'LOG_SERVINGS_BATCH': {
           const newServings = action.entries.map(e => ({ id: generateId(), ...e }));
           return { ...state, servings: [...state.servings, ...newServings] };
         }
 
+        // --- Child management actions ---
+        case 'ADD_CHILD': {
+          const child = {
+            id: generateId(),
+            name: action.name.trim(),
+            emoji: action.emoji || CHILD_EMOJIS[state.children.length % CHILD_EMOJIS.length],
+            order: state.children.length,
+            createdAt: getTodayStr()
+          };
+          return { ...state, children: [...state.children, child] };
+        }
+
+        case 'UPDATE_CHILD': {
+          const children = state.children.map(c => c.id === action.id ? { ...c, ...action.updates } : c);
+          return { ...state, children };
+        }
+
+        // Remove a child and all their associated meal plans and servings
+        case 'REMOVE_CHILD': {
+          return {
+            ...state,
+            children: state.children.filter(c => c.id !== action.id),
+            plans: state.plans.filter(p => p.childId !== action.id),
+            servings: state.servings.filter(s => s.childId !== action.id),
+          };
+        }
+
+        // Update app-level settings (sameMealDefault, activeChildId, etc.)
+        case 'UPDATE_SETTINGS': {
+          return { ...state, settings: { ...state.settings, ...action.updates } };
+        }
+
         // Import replaces all data stores from an uploaded JSON backup
+        // v4 format includes children and settings; v3 and earlier get migrated on load
         case 'IMPORT_DATA': return {
           ...state,
           foods: action.payload.foods || [],
@@ -298,6 +358,8 @@
           foodMemory: action.payload.foodMemory || {},
           shoppingDismissed: action.payload.shoppingDismissed || [],
           servings: action.payload.servings || [],
+          children: action.payload.children || state.children,
+          settings: action.payload.settings || state.settings,
         };
 
         default: return state;
@@ -306,7 +368,7 @@
 
     // --- Migration: convert old manual ratings to synthetic serving records ---
     // Called once after HYDRATE if foods still have .rating fields
-    const migrateRatingsToServings = (foods, existingServings) => {
+    const migrateRatingsToServings = (foods, existingServings, defaultChildId) => {
       const newServings = [];
       const updatedFoods = foods.map(f => {
         if (!f.rating) return f;
@@ -319,6 +381,7 @@
           foodId: f.id,
           date: f.createdAt || getTodayStr(),
           meal: 'lunch', // arbitrary — just need a data point
+          childId: defaultChildId,
           eaten,
         });
         // Strip the old rating field from the food
@@ -326,6 +389,32 @@
         return cleanFood;
       });
       return { foods: updatedFoods, servings: [...existingServings, ...newServings] };
+    };
+
+    // --- Migration: backfill childId onto plans and servings for existing single-child users ---
+    // Creates a default child if none exist, then stamps childId onto every record missing one.
+    const migrateToMultiChild = (data) => {
+      let { children, settings, plans, servings } = data;
+
+      // If children already exist, no migration needed
+      if (children && children.length > 0) return data;
+
+      // Create a default child for existing users
+      const defaultChild = {
+        id: 'default',
+        name: 'My Child',
+        emoji: '🦊',
+        order: 0,
+        createdAt: getTodayStr()
+      };
+      children = [defaultChild];
+      settings = { ...(settings || {}), sameMealDefault: true, activeChildId: 'default' };
+
+      // Backfill childId on all plans and servings that don't have one
+      plans = (plans || []).map(p => p.childId ? p : { ...p, childId: 'default' });
+      servings = (servings || []).map(s => s.childId ? s : { ...s, childId: 'default' });
+
+      return { ...data, children, settings, plans, servings };
     };
 
     // --- UI Helpers ---
@@ -344,56 +433,122 @@
       return r ? <i className={`${r.icon} ${r.color} ${size === 'lg' ? 'text-3xl' : 'text-xl'}`}></i> : null;
     };
 
+    // Per-child preference badges — shows each child's preference icon for a food
+    const ChildPreferenceBadges = ({ foodId, children, servings }) => {
+      if (!children || children.length < 2) return null;
+      return (
+        <div className="flex gap-1 items-center">
+          {children.map(child => {
+            const cServings = childServings(servings, child.id);
+            const { ratingId } = getPreferenceScore(foodId, cServings);
+            const r = RATINGS.find(rt => rt.id === ratingId);
+            if (!r) return null;
+            return (
+              <span key={child.id} className="flex items-center gap-0.5" title={`${child.name}: ${r.label}`}>
+                <span className="text-[10px]">{child.emoji}</span>
+                <i className={`${r.icon} ${r.color} text-xs`}></i>
+              </span>
+            );
+          })}
+        </div>
+      );
+    };
+
     const calculateExposures = (foodId, plans) => plans.filter(p => p.date <= getTodayStr() && p.foodIds.includes(foodId)).length;
+
+    // Child selector bar — shown when 2+ children exist.
+    // Renders horizontal pills for switching the active child.
+    const ChildSelector = ({ children, activeChildId, onSelect, settings, dispatch }) => {
+      if (!children || children.length < 2) return null;
+      return (
+        <div className="flex gap-2 items-center overflow-x-auto no-scrollbar pb-2 px-1">
+          {children.sort((a, b) => a.order - b.order).map(child => (
+            <button key={child.id} onClick={() => onSelect(child.id)}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-2xl text-sm font-black transition-all whitespace-nowrap active:scale-95 ${
+                activeChildId === child.id
+                  ? 'bg-brand-500 text-white shadow-lg'
+                  : 'bg-white text-brand-900 border border-slate-200'
+              }`}>
+              <span className="text-base">{child.emoji}</span>
+              <span>{child.name}</span>
+            </button>
+          ))}
+        </div>
+      );
+    };
 
     // ==========================================================================
     // MAIN VIEWS
     // ==========================================================================
 
-    function TodayView({ foods, plans, servings, state, dispatch, setQuickSort }) {
-      const [checkInMeal, setCheckInMeal] = useState(null); // which meal to check in
+    function TodayView({ foods, plans, servings, state, dispatch, setQuickSort, activeChildId, children: kids }) {
+      const [checkInMeal, setCheckInMeal] = useState(null);
       const [restaurantMode, setRestaurantMode] = useState(false);
       const [showData, setShowData] = useState(false);
       const tStr = getTodayStr();
+
+      // Filter plans and servings by active child
+      const myPlans = childPlans(plans, activeChildId);
+      const myServings = childServings(servings, activeChildId);
 
       // Find meals that have planned foods but no servings logged yet today.
       // These are the meals that need a check-in.
       const uncheckedMeals = useMemo(() => {
         return MEALS.filter(meal => {
-          const plan = plans.find(p => p.date === tStr && p.meal === meal);
+          const plan = myPlans.find(p => p.date === tStr && p.meal === meal);
           if (!plan || plan.foodIds.length === 0) return false;
           // Check if ANY food in this meal already has a serving logged for today
           const hasServings = plan.foodIds.some(fid =>
-            servings.some(s => s.foodId === fid && s.date === tStr && s.meal === meal)
+            myServings.some(s => s.foodId === fid && s.date === tStr && s.meal === meal)
           );
           return !hasServings;
         });
-      }, [plans, servings, tStr]);
+      }, [myPlans, myServings, tStr]);
 
+      // Balanced streak — computed for the active child
       const streak = useMemo(() => {
         let count = 0; let d = new Date();
         while (true) {
           const dStr = d.toLocaleDateString('en-CA');
-          const dayPlans = plans.filter(p => p.date === dStr && p.meal !== 'snack');
+          const dayPlans = myPlans.filter(p => p.date === dStr && p.meal !== 'snack');
           if (dayPlans.length === 0) break;
           const covered = new Set();
           dayPlans.forEach(p => p.foodIds.forEach(fid => foods.find(f => f.id === fid)?.categories?.forEach(c => covered.add(c))));
           if (BALANCE_CATEGORIES.every(c => covered.has(c))) { count++; d.setDate(d.getDate() - 1); } else break;
         }
         return count;
-      }, [plans, foods]);
+      }, [myPlans, foods]);
 
-      // Helper to check if a food is "disliked" via computed score
+      // Helper to check if a food is "disliked" by the active child
       const isDisliked = (f) => {
-        const { ratingId } = getPreferenceScore(f.id, servings);
+        const { ratingId } = getPreferenceScore(f.id, myServings);
         return ratingId === 'dislikes';
+      };
+
+      // Active child's name for display
+      const activeChild = kids.find(c => c.id === activeChildId);
+
+      // For multi-child check-in: find which children need checking in for a meal
+      const getUncheckedChildren = (meal) => {
+        return (kids || []).filter(child => {
+          const cPlans = childPlans(plans, child.id);
+          const cServings = childServings(servings, child.id);
+          const plan = cPlans.find(p => p.date === tStr && p.meal === meal);
+          if (!plan || plan.foodIds.length === 0) return false;
+          const hasServings = plan.foodIds.some(fid =>
+            cServings.some(s => s.foodId === fid && s.date === tStr && s.meal === meal)
+          );
+          return !hasServings;
+        });
       };
 
       return (
         <div className="animate-in pb-24">
           <div className="bg-brand-500 rounded-[2.5rem] p-8 text-white shadow-xl mb-6 relative overflow-hidden">
             <h2 className="text-5xl font-black mb-1">{streak} Days</h2>
-            <p className="text-brand-100 font-bold uppercase tracking-widest text-[10px] opacity-80">Balanced Streak</p>
+            <p className="text-brand-100 font-bold uppercase tracking-widest text-[10px] opacity-80">
+              {kids.length > 1 ? `${activeChild?.emoji || ''} ${activeChild?.name || ''}'s Balanced Streak` : 'Balanced Streak'}
+            </p>
             <div className="absolute top-6 right-6 flex gap-2">
               <button onClick={() => setShowData(true)} className="w-10 h-10 bg-brand-900/60 rounded-full flex items-center justify-center shadow-lg active:scale-90"><i className="ph ph-gear"></i></button>
               <button onClick={() => setQuickSort(true)} className="w-10 h-10 bg-brand-900 rounded-full flex items-center justify-center shadow-lg active:scale-90"><i className="ph ph-lightning-fill"></i></button>
@@ -401,7 +556,7 @@
           </div>
           <div className="grid grid-cols-2 gap-4 mb-6">
             <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100">
-              <p className="text-3xl font-black text-brand-500">{foods.filter(f => calculateExposures(f.id, plans) >= 15).length}</p>
+              <p className="text-3xl font-black text-brand-500">{foods.filter(f => calculateExposures(f.id, myPlans) >= 15).length}</p>
               <p className="text-[10px] font-bold text-neutral uppercase tracking-tighter">Accepted Foods</p>
             </div>
             <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100">
@@ -418,71 +573,175 @@
               <i className="ph ph-plus-circle text-brand-500 text-2xl"></i>
             </button>
             {/* Per-meal check-in buttons — one for each meal that needs logging */}
-            {uncheckedMeals.map(meal => (
-              <button key={meal} onClick={() => setCheckInMeal(meal)}
-                className="w-full bg-brand-900 text-white p-7 rounded-[2.5rem] shadow-xl flex items-center justify-between active:scale-95 transition-all">
-                <div className="text-left">
-                  <p className="text-xl font-black text-white capitalize">How was {meal}?</p>
-                  <p className="text-xs opacity-60 font-bold uppercase tracking-widest mt-1">Log what was eaten</p>
-                </div>
-                <i className="ph ph-arrow-circle-right text-white text-2xl"></i>
-              </button>
-            ))}
+            {uncheckedMeals.map(meal => {
+              const uncheckedKids = getUncheckedChildren(meal);
+              return (
+                <button key={meal} onClick={() => setCheckInMeal(meal)}
+                  className="w-full bg-brand-900 text-white p-7 rounded-[2.5rem] shadow-xl flex items-center justify-between active:scale-95 transition-all">
+                  <div className="text-left">
+                    <p className="text-xl font-black text-white capitalize">How was {meal}?</p>
+                    <p className="text-xs opacity-60 font-bold uppercase tracking-widest mt-1">
+                      {kids.length > 1 && uncheckedKids.length > 0
+                        ? `${uncheckedKids.map(c => c.emoji).join(' ')} needs logging`
+                        : 'Log what was eaten'}
+                    </p>
+                  </div>
+                  <i className="ph ph-arrow-circle-right text-white text-2xl"></i>
+                </button>
+              );
+            })}
           </div>
-          {restaurantMode && <DiscoveryModal dispatch={dispatch} onClose={() => setRestaurantMode(false)} />}
-          {checkInMeal && <MealCheckInModal meal={checkInMeal} plans={plans} foods={foods} servings={servings} dispatch={dispatch} onClose={() => setCheckInMeal(null)} />}
+          {restaurantMode && <DiscoveryModal dispatch={dispatch} onClose={() => setRestaurantMode(false)} activeChildId={activeChildId} children={kids} settings={state.settings} />}
+          {checkInMeal && <MealCheckInModal meal={checkInMeal} plans={plans} foods={foods} servings={servings} dispatch={dispatch} onClose={() => setCheckInMeal(null)} activeChildId={activeChildId} children={kids} settings={state.settings} />}
           {showData && <DataModal state={state} dispatch={dispatch} onClose={() => setShowData(false)} />}
         </div>
       );
     }
 
-    function MealPlannerView({ foods, plans, combos, servings, dispatch }) {
+    function MealPlannerView({ foods, plans, combos, servings, dispatch, activeChildId, children: kids, settings }) {
       const [viewMode, setViewMode] = useState('daily');
       const [date, setDate] = useState(getTodayStr());
       const [picker, setPicker] = useState(null);
       const shift = (o) => { let d = new Date(date + 'T00:00:00'); d.setDate(d.getDate() + o); setDate(d.toLocaleDateString('en-CA')); };
       const weekDates = Array.from({length: 7}, (_, i) => { const d = new Date(date + 'T00:00:00'); const day = d.getDay(); const diff = d.getDate() - day + (day === 0 ? -6 : 1) + i; d.setDate(diff); return d.toLocaleDateString('en-CA'); });
 
+      // Filter plans by active child
+      const myPlans = childPlans(plans, activeChildId);
+      const myServings = childServings(servings, activeChildId);
+
+      // When sameMealDefault is on, check if other children have different meals
+      const getChildDiffs = (date, meal) => {
+        if (!kids || kids.length < 2) return null;
+        const basePlan = myPlans.find(p => p.date === date && p.meal === meal);
+        const baseFoodIds = new Set(basePlan?.foodIds || []);
+        return kids.filter(c => c.id !== activeChildId).map(child => {
+          const cPlan = plans.find(p => p.date === date && p.meal === meal && p.childId === child.id);
+          const cFoodIds = new Set(cPlan?.foodIds || []);
+          // Find differences
+          const removed = [...baseFoodIds].filter(id => !cFoodIds.has(id));
+          const added = [...cFoodIds].filter(id => !baseFoodIds.has(id));
+          const same = removed.length === 0 && added.length === 0 && baseFoodIds.size === cFoodIds.size;
+          return { child, removed, added, same };
+        });
+      };
+
       return (
         <div className="animate-in pb-24 px-1">
           <div className="bg-white p-4 rounded-3xl border border-slate-100 mb-4 sticky top-0 z-30 shadow-sm"><div className="flex justify-between items-center mb-4"><button onClick={() => shift(-1)} className="w-10 h-10 bg-brand-50 text-brand-500 rounded-full font-black flex items-center justify-center active:scale-90"><i className="ph ph-caret-left"></i></button><div className="text-center font-black"><p className="text-lg text-brand-900">{date === getTodayStr() ? 'Today' : date.split('-').slice(1).join('/')}</p><p className="text-[8px] uppercase tracking-[0.3em] text-neutral">{new Date(date+'T00:00:00').toLocaleDateString('en-US',{weekday:'long'})}</p></div><button onClick={() => shift(1)} className="w-10 h-10 bg-brand-50 text-brand-500 rounded-full font-black flex items-center justify-center active:scale-90"><i className="ph ph-caret-right"></i></button></div><div className="flex gap-2 p-1 bg-brand-50 rounded-2xl"><button onClick={() => setViewMode('daily')} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${viewMode === 'daily' ? 'bg-white shadow text-brand-500' : 'opacity-40'}`}>Daily</button><button onClick={() => setViewMode('weekly')} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${viewMode === 'weekly' ? 'bg-white shadow text-brand-500' : 'opacity-40'}`}>Weekly</button></div></div>
           {viewMode === 'daily' ? (
             <div className="space-y-4">{MEALS.map(m => {
-              const p = plans.find(plan => plan.date === date && plan.meal === m);
+              const p = myPlans.find(plan => plan.date === date && plan.meal === m);
               const pf = p?.foodIds.map(id => foods.find(f => f.id === id)).filter(Boolean) || [];
               const cov = new Set(pf.flatMap(f => f.categories || []));
-              return (<div key={m} onClick={() => setPicker({date, meal:m})} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-transparent active:scale-[0.98] transition-all"><div className="flex justify-between items-center mb-4"><h3 className="font-black text-xl capitalize text-brand-900">{m}</h3><div className="flex gap-1">{BALANCE_CATEGORIES.map(c => (<span key={c} className={`text-[8px] px-1.5 py-0.5 rounded font-black ${cov.has(c) ? 'bg-brand-500 text-white' : 'bg-slate-100 text-slate-300'}`}>{c[0].toUpperCase()}</span>))}</div></div>{pf.length ? <div className="space-y-2">{pf.map(f => (<div key={f.id} className="flex justify-between items-center bg-brand-50/50 p-3 rounded-xl text-sm font-bold"><span>{f.name}</span><RatingIcon foodId={f.id} servings={servings} /></div>))}</div> : <p className="text-[10px] text-slate-200 border-2 border-dashed border-slate-100 rounded-2xl py-6 text-center font-black uppercase tracking-widest">+ Add Food</p>}</div>);
+              const diffs = getChildDiffs(date, m);
+              return (<div key={m} onClick={() => setPicker({date, meal:m})} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-transparent active:scale-[0.98] transition-all">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-black text-xl capitalize text-brand-900">{m}</h3>
+                  <div className="flex gap-1">{BALANCE_CATEGORIES.map(c => (<span key={c} className={`text-[8px] px-1.5 py-0.5 rounded font-black ${cov.has(c) ? 'bg-brand-500 text-white' : 'bg-slate-100 text-slate-300'}`}>{c[0].toUpperCase()}</span>))}</div>
+                </div>
+                {pf.length ? <div className="space-y-2">
+                  {pf.map(f => (<div key={f.id} className="flex justify-between items-center bg-brand-50/50 p-3 rounded-xl text-sm font-bold"><span>{f.name}</span><RatingIcon foodId={f.id} servings={myServings} /></div>))}
+                  {/* Show other children's modifications */}
+                  {diffs && diffs.some(d => !d.same) && (
+                    <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100 mt-2">
+                      {diffs.map(d => {
+                        if (d.same) return <span key={d.child.id} className="text-[10px] text-neutral">{d.child.emoji} <i className="ph ph-check text-brand-500"></i></span>;
+                        const removedNames = d.removed.map(id => foods.find(f => f.id === id)?.name).filter(Boolean);
+                        const addedNames = d.added.map(id => foods.find(f => f.id === id)?.name).filter(Boolean);
+                        return (
+                          <span key={d.child.id} className="text-[10px] text-neutral">
+                            {d.child.emoji}{' '}
+                            {removedNames.length > 0 && <span className="text-accent">-{removedNames.join(', ')}</span>}
+                            {removedNames.length > 0 && addedNames.length > 0 && ' '}
+                            {addedNames.length > 0 && <span className="text-brand-500">+{addedNames.join(', ')}</span>}
+                            {d.removed.length === 0 && d.added.length === 0 && removedNames.length === 0 && addedNames.length === 0 && (
+                              <span className="text-neutral opacity-50">no meal</span>
+                            )}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div> : <p className="text-[10px] text-slate-200 border-2 border-dashed border-slate-100 rounded-2xl py-6 text-center font-black uppercase tracking-widest">+ Add Food</p>}
+              </div>);
             })}</div>
           ) : (
             <div className="bg-white rounded-[2rem] border overflow-hidden"><div className="overflow-x-auto no-scrollbar"><div className="min-w-[500px]">
               <div className="grid grid-cols-[60px_repeat(7,1fr)] bg-slate-50 border-b border-slate-100"><div />{weekDates.map((d, i) => (<div key={d} className={`py-3 text-center ${d === getTodayStr() ? 'bg-brand-500 text-white' : ''}`}><p className="text-[8px] font-black opacity-60">{DAY_LABELS[i]}</p><p className="text-xs font-black">{d.split('-')[2]}</p></div>))}</div>
-              {MEALS.map(meal => (<div key={meal} className="grid grid-cols-[60px_repeat(7,1fr)] border-b last:border-0"><div className="flex items-center justify-center p-2 text-[10px] font-black uppercase opacity-20">{meal[0]}</div>{weekDates.map(d => { const p = plans.find(plan => plan.date === d && plan.meal === meal); const cov = new Set(p?.foodIds.flatMap(id => foods.find(f => f.id === id)?.categories || [])); return (<div key={d} onClick={() => { setDate(d); setViewMode('daily'); }} className={`p-2 border-l flex flex-col items-center justify-center gap-1 ${d === date ? 'bg-brand-50/30' : ''}`}><div className="flex flex-wrap gap-0.5 justify-center">{BALANCE_CATEGORIES.map(c => (<div key={c} className={`w-2 h-2 rounded-full ${cov.has(c) ? 'bg-brand-500' : 'bg-slate-100'}`} />))}</div></div>); })}</div>))}
+              {MEALS.map(meal => (<div key={meal} className="grid grid-cols-[60px_repeat(7,1fr)] border-b last:border-0"><div className="flex items-center justify-center p-2 text-[10px] font-black uppercase opacity-20">{meal[0]}</div>{weekDates.map(d => { const p = myPlans.find(plan => plan.date === d && plan.meal === meal); const cov = new Set(p?.foodIds.flatMap(id => foods.find(f => f.id === id)?.categories || [])); return (<div key={d} onClick={() => { setDate(d); setViewMode('daily'); }} className={`p-2 border-l flex flex-col items-center justify-center gap-1 ${d === date ? 'bg-brand-50/30' : ''}`}><div className="flex flex-wrap gap-0.5 justify-center">{BALANCE_CATEGORIES.map(c => (<div key={c} className={`w-2 h-2 rounded-full ${cov.has(c) ? 'bg-brand-500' : 'bg-slate-100'}`} />))}</div></div>); })}</div>))}
             </div></div></div>
           )}
-          {picker && <FoodPickerModal date={picker.date} meal={picker.meal} foods={foods} combos={combos} servings={servings} current={plans.find(p => p.date === picker.date && p.meal === picker.meal)?.foodIds || []} dispatch={dispatch} onClose={() => setPicker(null)} />}
+          {picker && <FoodPickerModal date={picker.date} meal={picker.meal} foods={foods} combos={combos} servings={servings} current={myPlans.find(p => p.date === picker.date && p.meal === picker.meal)?.foodIds || []} dispatch={dispatch} onClose={() => setPicker(null)} activeChildId={activeChildId} children={kids} settings={settings} />}
         </div>
       );
     }
 
-    function FoodPickerModal({ date, meal, foods, combos, servings, current, dispatch, onClose }) {
+    // FoodPickerModal: When sameMealDefault is ON, toggling a food dispatches
+    // TOGGLE_FOOD_IN_MEAL for ALL children. When OFF, only the active child.
+    function FoodPickerModal({ date, meal, foods, combos, servings, current, dispatch, onClose, activeChildId, children: kids, settings }) {
       const [tab, setTab] = useState('pantry');
       const [search, setSearch] = useState('');
       const [cat, setCat] = useState(null);
+      const myServings = childServings(servings, activeChildId);
       const covered = useMemo(() => { const s = new Set(); current.forEach(id => foods.find(f=>f.id===id)?.categories?.forEach(c=>s.add(c))); return s; }, [current, foods]);
       const list = foods.filter(f => (tab === 'pantry' ? f.stock !== 'out' && f.source !== 'outside' : true) && f.name.toLowerCase().includes(search.toLowerCase()) && (!cat || f.categories?.includes(cat))).sort((a,b)=>a.name.localeCompare(b.name));
+
+      // Determine which children to target when toggling foods
+      const getTargetChildIds = () => {
+        if (settings?.sameMealDefault && kids.length > 1) return kids.map(c => c.id);
+        return [activeChildId];
+      };
+
+      const handleToggleFood = (foodId) => {
+        const targets = getTargetChildIds();
+        targets.forEach(cid => {
+          dispatch({ type: 'TOGGLE_FOOD_IN_MEAL', date, meal, childId: cid, foodId });
+        });
+      };
+
+      const handleApplyCombo = (comboFoodIds) => {
+        const targets = getTargetChildIds();
+        dispatch({ type: 'APPLY_COMBO', date, meal, childIds: targets, foodIds: comboFoodIds });
+      };
+
       return (
-        <Modal onClose={onClose}><div className="p-6"><h2 className="text-2xl font-black mb-4 text-brand-900 tracking-tight capitalize">Add to {meal}</h2><input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="w-full bg-brand-50 p-4 rounded-2xl outline-none font-bold text-brand-900 mb-4" /><div className="flex gap-2 overflow-x-auto no-scrollbar pb-4"><button onClick={() => setCat(null)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase ${!cat ? 'bg-brand-900 text-white' : 'bg-white border text-neutral'}`}>All</button>{CATEGORIES.map(c => (<button key={c.id} onClick={() => setCat(cat === c.id ? null : c.id)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase flex items-center gap-1.5 ${cat === c.id ? 'bg-brand-900 text-white' : 'bg-white border text-neutral'}`}>{covered.has(c.id) && <div className="w-1.5 h-1.5 rounded-full bg-brand-500" />} {c.label}</button>))}</div><div className="flex gap-1 p-1 bg-gray-100 rounded-2xl mb-4">{['pantry', 'library', 'combos'].map(t => (<button key={t} onClick={() => setTab(t)} className={`flex-1 py-2 text-[10px] uppercase font-black rounded-xl ${tab === t ? 'bg-white shadow text-brand-900' : 'text-gray-400'}`}>{t}</button>))}</div><div className="space-y-2 max-h-64 overflow-y-auto no-scrollbar">{tab === 'combos' ? (combos || []).map(c => (<button key={c.id} onClick={() => { dispatch({type:'APPLY_COMBO', date, meal, foodIds:c.foodIds}); onClose(); }} className="w-full p-4 bg-brand-50 rounded-2xl text-left border border-brand-100 active:scale-95 shadow-sm"><p className="font-black text-brand-900">{c.name}</p><p className="text-[10px] font-bold text-neutral uppercase mt-1 opacity-60">{c.foodIds.length} items</p></button>)) : list.map(f => { const sel = current.includes(f.id); return (<button key={f.id} onClick={() => dispatch({type:'TOGGLE_FOOD_IN_MEAL', date, meal, foodId:f.id})} className={`w-full p-4 rounded-2xl border flex justify-between items-center transition-all active:scale-95 ${sel ? 'bg-brand-100 border-brand-500 text-brand-900 shadow-inner' : 'bg-white border-slate-100'}`}><span className="font-bold">{f.name}</span><RatingIcon foodId={f.id} servings={servings} /></button>); })}</div><button onClick={onClose} className="w-full mt-6 py-5 bg-brand-900 text-white rounded-3xl font-black uppercase shadow-xl">Done</button></div></Modal>
+        <Modal onClose={onClose}><div className="p-6">
+          <h2 className="text-2xl font-black mb-2 text-brand-900 tracking-tight capitalize">Add to {meal}</h2>
+          {settings?.sameMealDefault && kids.length > 1 && (
+            <p className="text-[10px] font-bold text-brand-500 mb-3">
+              <i className="ph ph-users-three mr-1"></i>Adding for all kids — edit individually in daily view
+            </p>
+          )}
+          <input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="w-full bg-brand-50 p-4 rounded-2xl outline-none font-bold text-brand-900 mb-4" />
+          <div className="flex gap-2 overflow-x-auto no-scrollbar pb-4"><button onClick={() => setCat(null)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase ${!cat ? 'bg-brand-900 text-white' : 'bg-white border text-neutral'}`}>All</button>{CATEGORIES.map(c => (<button key={c.id} onClick={() => setCat(cat === c.id ? null : c.id)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase flex items-center gap-1.5 ${cat === c.id ? 'bg-brand-900 text-white' : 'bg-white border text-neutral'}`}>{covered.has(c.id) && <div className="w-1.5 h-1.5 rounded-full bg-brand-500" />} {c.label}</button>))}</div>
+          <div className="flex gap-1 p-1 bg-gray-100 rounded-2xl mb-4">{['pantry', 'library', 'combos'].map(t => (<button key={t} onClick={() => setTab(t)} className={`flex-1 py-2 text-[10px] uppercase font-black rounded-xl ${tab === t ? 'bg-white shadow text-brand-900' : 'text-gray-400'}`}>{t}</button>))}</div>
+          <div className="space-y-2 max-h-64 overflow-y-auto no-scrollbar">
+            {tab === 'combos'
+              ? (combos || []).map(c => (<button key={c.id} onClick={() => { handleApplyCombo(c.foodIds); onClose(); }} className="w-full p-4 bg-brand-50 rounded-2xl text-left border border-brand-100 active:scale-95 shadow-sm"><p className="font-black text-brand-900">{c.name}</p><p className="text-[10px] font-bold text-neutral uppercase mt-1 opacity-60">{c.foodIds.length} items</p></button>))
+              : list.map(f => {
+                  const sel = current.includes(f.id);
+                  return (<button key={f.id} onClick={() => handleToggleFood(f.id)} className={`w-full p-4 rounded-2xl border flex justify-between items-center transition-all active:scale-95 ${sel ? 'bg-brand-100 border-brand-500 text-brand-900 shadow-inner' : 'bg-white border-slate-100'}`}><span className="font-bold">{f.name}</span><RatingIcon foodId={f.id} servings={myServings} /></button>);
+                })
+            }
+          </div>
+          <button onClick={onClose} className="w-full mt-6 py-5 bg-brand-900 text-white rounded-3xl font-black uppercase shadow-xl">Done</button>
+        </div></Modal>
       );
     }
 
-    function ListView({ foods, plans, servings, title, selectionIds, setSelectionIds, onEdit, dispatch, showBatch, allFoods }) {
+    function ListView({ foods, plans, servings, title, selectionIds, setSelectionIds, onEdit, dispatch, showBatch, allFoods, children: kids, activeChildId }) {
       const [search, setSearch] = useState('');
       const [batchMode, setBatchMode] = useState(false);
       const [input, setInput] = useState('');
       const filtered = foods.filter(f => f.name.toLowerCase().includes(search.toLowerCase())).sort((a,b) => a.name.localeCompare(b.name));
       const inSelect = selectionIds.length > 0;
+
+      // For per-child preference display
+      const myServings = childServings(servings, activeChildId);
+      const myPlans = childPlans(plans, activeChildId);
+
       return (
-        <div className="animate-in pb-40 space-y-1.5"><div className="flex justify-between items-center mb-6 px-1"><h2 className="text-3xl font-black text-brand-900 tracking-tight">{title}</h2><div className="flex gap-2">{showBatch && <button onClick={() => setBatchMode(true)} className="bg-brand-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg">Batch</button>}<button onClick={() => setSelectionIds(inSelect ? [] : [filtered[0]?.id].filter(Boolean))} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase ${inSelect ? 'bg-brand-900 text-white' : 'bg-white border text-brand-500'}`}>{inSelect ? 'Cancel' : 'Select'}</button></div></div><input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="w-full p-3 mb-4 rounded-2xl bg-white shadow-sm border-none font-bold text-sm outline-none" />{filtered.map(f => { const sel = selectionIds.includes(f.id); return (<div key={f.id} onClick={() => inSelect ? setSelectionIds(p => p.includes(f.id) ? p.filter(x => x !== f.id) : [...p, f.id]) : onEdit(f)} className={`food-card bg-white px-4 py-2.5 rounded-xl border border-transparent shadow-sm flex justify-between items-center ${sel ? 'selected-card border-brand-500 scale-[0.98]' : 'border-b-slate-100'}`}><div className="flex items-center gap-3">{inSelect && <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${sel ? 'bg-brand-500 border-brand-500' : 'bg-white border-slate-200'}`}>{sel && <i className="ph ph-check text-[10px] text-white"></i>}</div>}<div><p className="font-bold text-sm">{f.source === 'outside' && '🍽️ '}{f.name}</p><div className="flex gap-1 mt-0.5"><p className="text-[8px] uppercase font-black text-neutral opacity-50 tracking-tighter">Tries: {calculateExposures(f.id, plans)}</p>{f.stock === 'low' && <span className="text-[8px] font-black text-amber-500 ml-1">Low</span>}</div></div></div><RatingIcon foodId={f.id} servings={servings} /></div>); })}{batchMode && <Modal onClose={() => setBatchMode(false)}><div className="p-8"><h2 className="text-2xl font-black mb-4">Batch Import</h2><textarea value={input} onChange={e => setInput(e.target.value)} className="w-full h-40 bg-brand-50 rounded-2xl p-4 outline-none border-none font-bold" placeholder="Pizza, Peas, Pasta..." /><div className="flex gap-2 mt-6"><button onClick={() => setBatchMode(false)} className="flex-1 font-bold text-neutral uppercase text-[10px]">Cancel</button><button onClick={() => { dispatch({type:'BATCH_ADD', names: input.split(/[,\n]/)}); setBatchMode(false); setInput(''); }} className="flex-[2] bg-brand-500 text-white py-4 rounded-2xl font-black shadow-lg">Import</button></div></div></Modal>}<BulkActionBar selectedIds={selectionIds} onClear={() => setSelectionIds([])} dispatch={dispatch} foods={allFoods || foods} /></div>
+        <div className="animate-in pb-40 space-y-1.5"><div className="flex justify-between items-center mb-6 px-1"><h2 className="text-3xl font-black text-brand-900 tracking-tight">{title}</h2><div className="flex gap-2">{showBatch && <button onClick={() => setBatchMode(true)} className="bg-brand-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg">Batch</button>}<button onClick={() => setSelectionIds(inSelect ? [] : [filtered[0]?.id].filter(Boolean))} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase ${inSelect ? 'bg-brand-900 text-white' : 'bg-white border text-brand-500'}`}>{inSelect ? 'Cancel' : 'Select'}</button></div></div><input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="w-full p-3 mb-4 rounded-2xl bg-white shadow-sm border-none font-bold text-sm outline-none" />{filtered.map(f => { const sel = selectionIds.includes(f.id); return (<div key={f.id} onClick={() => inSelect ? setSelectionIds(p => p.includes(f.id) ? p.filter(x => x !== f.id) : [...p, f.id]) : onEdit(f)} className={`food-card bg-white px-4 py-2.5 rounded-xl border border-transparent shadow-sm flex justify-between items-center ${sel ? 'selected-card border-brand-500 scale-[0.98]' : 'border-b-slate-100'}`}><div className="flex items-center gap-3">{inSelect && <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${sel ? 'bg-brand-500 border-brand-500' : 'bg-white border-slate-200'}`}>{sel && <i className="ph ph-check text-[10px] text-white"></i>}</div>}<div><p className="font-bold text-sm">{f.source === 'outside' && '🍽️ '}{f.name}</p><div className="flex gap-1 mt-0.5"><p className="text-[8px] uppercase font-black text-neutral opacity-50 tracking-tighter">Tries: {calculateExposures(f.id, myPlans)}</p>{f.stock === 'low' && <span className="text-[8px] font-black text-amber-500 ml-1">Low</span>}</div></div></div><div className="flex items-center gap-2">{/* Show per-child preference badges when multiple children exist */}<ChildPreferenceBadges foodId={f.id} children={kids} servings={servings} />{/* Show active child's preference as the main icon */}{(!kids || kids.length < 2) && <RatingIcon foodId={f.id} servings={myServings} />}</div></div>); })}{batchMode && <Modal onClose={() => setBatchMode(false)}><div className="p-8"><h2 className="text-2xl font-black mb-4">Batch Import</h2><textarea value={input} onChange={e => setInput(e.target.value)} className="w-full h-40 bg-brand-50 rounded-2xl p-4 outline-none border-none font-bold" placeholder="Pizza, Peas, Pasta..." /><div className="flex gap-2 mt-6"><button onClick={() => setBatchMode(false)} className="flex-1 font-bold text-neutral uppercase text-[10px]">Cancel</button><button onClick={() => { dispatch({type:'BATCH_ADD', names: input.split(/[,\n]/)}); setBatchMode(false); setInput(''); }} className="flex-[2] bg-brand-500 text-white py-4 rounded-2xl font-black shadow-lg">Import</button></div></div></Modal>}<BulkActionBar selectedIds={selectionIds} onClear={() => setSelectionIds([])} dispatch={dispatch} foods={allFoods || foods} /></div>
       );
     }
 
@@ -490,7 +749,9 @@
     function App() {
       const [state, dispatch] = useReducer(appReducer, {
         isLoaded: false, foods: [], plans: [], combos: [],
-        shoppingDismissed: [], foodMemory: {}, servings: []
+        shoppingDismissed: [], foodMemory: {}, servings: [],
+        children: [], // Array of child objects
+        settings: { sameMealDefault: true, activeChildId: null }, // App-level settings
       });
       const [tab, setTab] = useState('today');
       const [edit, setEdit] = useState(null);
@@ -498,35 +759,45 @@
       const [lSelect, setLSelect] = useState([]);
       const [quickSort, setQuickSort] = useState(false);
 
+      // Track the active child locally (synced to settings)
+      const activeChildId = state.settings?.activeChildId || state.children?.[0]?.id || null;
+      const setActiveChildId = (id) => dispatch({ type: 'UPDATE_SETTINGS', updates: { activeChildId: id } });
+
       useEffect(() => {
         const load = async () => {
-          const foods = await dbLoad('foods', []);
-          const plans = await dbLoad('plans', []);
+          let foods = await dbLoad('foods', []);
+          let plans = await dbLoad('plans', []);
           const memory = await dbLoad('memory', {});
           const dismissed = await dbLoad('dismissed', []);
           const combos = await dbLoad('combos', []);
-          const servings = await dbLoad('servings', []);
+          let servings = await dbLoad('servings', []);
+          let children = await dbLoad('children', []);
+          let settings = await dbLoad('settings', { sameMealDefault: true, activeChildId: null });
 
           // --- Migration: convert old manual .rating fields to serving records ---
           const hasOldRatings = foods.some(f => f.rating);
           if (hasOldRatings) {
-            const migrated = migrateRatingsToServings(foods, servings);
+            // Determine default child ID (will be 'default' after multi-child migration)
+            const defaultChildId = children.length > 0 ? children[0].id : 'default';
+            const migrated = migrateRatingsToServings(foods, servings, defaultChildId);
+            foods = migrated.foods;
+            servings = migrated.servings;
             // Also clean rating out of foodMemory entries
             const cleanMemory = {};
             Object.entries(memory).forEach(([k, v]) => {
               const { rating, ...rest } = v || {};
               cleanMemory[k] = rest;
             });
-            dispatch({ type: 'HYDRATE', payload: {
-              foods: migrated.foods, plans, foodMemory: cleanMemory,
-              shoppingDismissed: dismissed, combos, servings: migrated.servings
-            }});
-          } else {
-            dispatch({ type: 'HYDRATE', payload: {
-              foods, plans, foodMemory: memory,
-              shoppingDismissed: dismissed, combos, servings
-            }});
+            Object.assign(memory, cleanMemory);
           }
+
+          // --- Migration: ensure multi-child data model is in place ---
+          const data = migrateToMultiChild({
+            foods, plans, combos, foodMemory: memory,
+            shoppingDismissed: dismissed, servings, children, settings
+          });
+
+          dispatch({ type: 'HYDRATE', payload: data });
         };
         load();
       }, []);
@@ -539,6 +810,8 @@
         dbSave('dismissed', state.shoppingDismissed);
         dbSave('combos', state.combos);
         dbSave('servings', state.servings);
+        dbSave('children', state.children);
+        dbSave('settings', state.settings);
       }, [state]);
 
       if (!state.isLoaded) return <div className="flex h-screen items-center justify-center text-brand-500 font-black animate-pulse uppercase">Loading</div>;
@@ -550,14 +823,28 @@
       return (
         <div className="min-h-screen flex flex-col pt-8">
           <main className="flex-1 max-w-md mx-auto w-full p-6">
-            {tab === 'today' && <TodayView foods={state.foods} plans={state.plans} servings={state.servings} state={state} dispatch={dispatch} setQuickSort={setQuickSort} />}
-            {tab === 'pantry' && <ListView foods={state.foods.filter(f => f.stock !== 'out' && f.source !== 'outside')} plans={state.plans} servings={state.servings} title="Pantry" selectionIds={pSelect} setSelectionIds={setPSelect} onEdit={setEdit} dispatch={dispatch} showBatch allFoods={state.foods} />}
-            {tab === 'library' && <ListView foods={state.foods} plans={state.plans} servings={state.servings} title="Library" selectionIds={lSelect} setSelectionIds={setLSelect} onEdit={setEdit} dispatch={dispatch} allFoods={state.foods} />}
-            {tab === 'planner' && <MealPlannerView foods={state.foods} plans={state.plans} combos={state.combos} servings={state.servings} dispatch={dispatch} />}
-            {tab === 'shopping' && <ShoppingListView foods={state.foods} plans={state.plans} servings={state.servings} dismissed={state.shoppingDismissed} dispatch={dispatch} />}
+            {/* Child selector — appears when 2+ children exist */}
+            {state.children.length >= 2 && tab !== 'shopping' && (
+              <div className="mb-4">
+                <ChildSelector children={state.children} activeChildId={activeChildId} onSelect={setActiveChildId} settings={state.settings} dispatch={dispatch} />
+              </div>
+            )}
+            {tab === 'today' && <TodayView foods={state.foods} plans={state.plans} servings={state.servings} state={state} dispatch={dispatch} setQuickSort={setQuickSort} activeChildId={activeChildId} children={state.children} />}
+            {tab === 'pantry' && <ListView foods={state.foods.filter(f => f.stock !== 'out' && f.source !== 'outside')} plans={state.plans} servings={state.servings} title="Pantry" selectionIds={pSelect} setSelectionIds={setPSelect} onEdit={setEdit} dispatch={dispatch} showBatch allFoods={state.foods} children={state.children} activeChildId={activeChildId} />}
+            {tab === 'library' && <ListView foods={state.foods} plans={state.plans} servings={state.servings} title="Library" selectionIds={lSelect} setSelectionIds={setLSelect} onEdit={setEdit} dispatch={dispatch} allFoods={state.foods} children={state.children} activeChildId={activeChildId} />}
+            {tab === 'planner' && <MealPlannerView foods={state.foods} plans={state.plans} combos={state.combos} servings={state.servings} dispatch={dispatch} activeChildId={activeChildId} children={state.children} settings={state.settings} />}
+            {tab === 'shopping' && <ShoppingListView foods={state.foods} plans={state.plans} servings={state.servings} dismissed={state.shoppingDismissed} dispatch={dispatch} children={state.children} />}
+            {tab === 'family' && <FamilySettingsView children={state.children} settings={state.settings} dispatch={dispatch} activeChildId={activeChildId} setActiveChildId={setActiveChildId} />}
           </main>
-          <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t flex justify-around p-3 pb-8 z-50">{NAV.map(t => (<button key={t.id} onClick={() => setTab(t.id)} className={`flex flex-col items-center gap-1 transition-all ${tab === t.id ? 'scale-110 text-brand-500' : 'opacity-40 grayscale'}`}><i className={`${tab === t.id ? t.i + '-fill' : t.i} text-2xl`}></i><span className="text-[9px] font-black uppercase tracking-widest">{t.id}</span></button>))}</nav>
-          {edit && <FoodFormModal food={edit} plans={state.plans} servings={state.servings} onSave={(d) => { dispatch({type:'UPDATE_FOOD', id:edit.id, updates:d}); setEdit(null); }} onDelete={() => { dispatch({type:'DELETE_FOOD', id:edit.id}); setEdit(null); }} onClose={() => setEdit(null)} />}
+          <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t flex justify-around p-3 pb-8 z-50">
+            {NAV.map(t => (<button key={t.id} onClick={() => setTab(t.id)} className={`flex flex-col items-center gap-1 transition-all ${tab === t.id ? 'scale-110 text-brand-500' : 'opacity-40 grayscale'}`}><i className={`${tab === t.id ? t.i + '-fill' : t.i} text-2xl`}></i><span className="text-[9px] font-black uppercase tracking-widest">{t.id}</span></button>))}
+            {/* Family/Settings tab */}
+            <button onClick={() => setTab('family')} className={`flex flex-col items-center gap-1 transition-all ${tab === 'family' ? 'scale-110 text-brand-500' : 'opacity-40 grayscale'}`}>
+              <i className={`${tab === 'family' ? 'ph-users-three-fill' : 'ph-users-three'} text-2xl`}></i>
+              <span className="text-[9px] font-black uppercase tracking-widest">Family</span>
+            </button>
+          </nav>
+          {edit && <FoodFormModal food={edit} plans={state.plans} servings={state.servings} onSave={(d) => { dispatch({type:'UPDATE_FOOD', id:edit.id, updates:d}); setEdit(null); }} onDelete={() => { dispatch({type:'DELETE_FOOD', id:edit.id}); setEdit(null); }} onClose={() => setEdit(null)} activeChildId={activeChildId} children={state.children} />}
         </div>
       );
     }
@@ -566,21 +853,169 @@
     // COMPONENTS
     // ==========================================================================
 
+    // FamilySettingsView: Manage children and family settings
+    function FamilySettingsView({ children: kids, settings, dispatch, activeChildId, setActiveChildId }) {
+      const [editChild, setEditChild] = useState(null); // child object being edited, or 'new'
+      const [confirmRemove, setConfirmRemove] = useState(null);
+
+      return (
+        <div className="animate-in pb-24">
+          <h2 className="text-3xl font-black text-brand-900 tracking-tight mb-6">Family</h2>
+
+          {/* Children list */}
+          <div className="space-y-3 mb-8">
+            {kids.sort((a, b) => a.order - b.order).map(child => (
+              <div key={child.id} className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <span className="text-3xl">{child.emoji}</span>
+                  <div>
+                    <p className="font-black text-brand-900 text-lg">{child.name}</p>
+                    <p className="text-[10px] font-bold text-neutral uppercase">Added {child.createdAt}</p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => setEditChild(child)}
+                    className="w-10 h-10 bg-brand-50 rounded-full flex items-center justify-center active:scale-90">
+                    <i className="ph ph-pencil-simple text-brand-500"></i>
+                  </button>
+                  {kids.length > 1 && (
+                    confirmRemove === child.id ? (
+                      <div className="flex gap-1">
+                        <button onClick={() => setConfirmRemove(null)}
+                          className="px-3 py-2 text-[10px] font-black text-neutral uppercase">Cancel</button>
+                        <button onClick={() => {
+                          dispatch({ type: 'REMOVE_CHILD', id: child.id });
+                          setConfirmRemove(null);
+                          // If we removed the active child, switch to the first remaining one
+                          if (activeChildId === child.id) {
+                            const remaining = kids.filter(c => c.id !== child.id);
+                            if (remaining.length > 0) setActiveChildId(remaining[0].id);
+                          }
+                        }}
+                          className="px-3 py-2 bg-accent text-white rounded-xl text-[10px] font-black uppercase">Remove</button>
+                      </div>
+                    ) : (
+                      <button onClick={() => setConfirmRemove(child.id)}
+                        className="w-10 h-10 bg-red-50 rounded-full flex items-center justify-center active:scale-90">
+                        <i className="ph ph-trash text-accent"></i>
+                      </button>
+                    )
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {/* Add child button */}
+            <button onClick={() => setEditChild('new')}
+              className="w-full p-5 rounded-[2rem] border-2 border-dashed border-brand-500 text-brand-500 font-black uppercase text-sm flex items-center justify-center gap-2 active:scale-95 transition-all">
+              <i className="ph ph-plus-circle text-xl"></i> Add Child
+            </button>
+          </div>
+
+          {/* Settings */}
+          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 mb-6">
+            <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-4">Meal Planning</p>
+            <button onClick={() => dispatch({ type: 'UPDATE_SETTINGS', updates: { sameMealDefault: !settings?.sameMealDefault } })}
+              className="w-full flex items-center justify-between p-4 bg-brand-50 rounded-2xl">
+              <div className="text-left">
+                <p className="font-bold text-brand-900">Same meal for all kids</p>
+                <p className="text-[10px] text-neutral font-bold mt-0.5">When adding food to a meal, add for everyone at once</p>
+              </div>
+              <div className={`w-12 h-7 rounded-full transition-all flex items-center px-1 ${settings?.sameMealDefault ? 'bg-brand-500' : 'bg-slate-300'}`}>
+                <div className={`w-5 h-5 bg-white rounded-full shadow transition-all ${settings?.sameMealDefault ? 'translate-x-5' : ''}`} />
+              </div>
+            </button>
+          </div>
+
+          {/* Child form modal */}
+          {editChild && (
+            <ChildFormModal
+              child={editChild === 'new' ? null : editChild}
+              existingChildren={kids}
+              onSave={(data) => {
+                if (editChild === 'new') {
+                  dispatch({ type: 'ADD_CHILD', name: data.name, emoji: data.emoji });
+                } else {
+                  dispatch({ type: 'UPDATE_CHILD', id: editChild.id, updates: { name: data.name, emoji: data.emoji } });
+                }
+                setEditChild(null);
+              }}
+              onClose={() => setEditChild(null)}
+            />
+          )}
+        </div>
+      );
+    }
+
+    // ChildFormModal: Add or edit a child's name and emoji
+    function ChildFormModal({ child, existingChildren, onSave, onClose }) {
+      const [name, setName] = useState(child?.name || '');
+      const [emoji, setEmoji] = useState(child?.emoji || CHILD_EMOJIS[existingChildren?.length % CHILD_EMOJIS.length || 0]);
+
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-8">
+            <h2 className="text-2xl font-black text-brand-900 mb-6">{child ? 'Edit Child' : 'Add Child'}</h2>
+
+            <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">Name</p>
+            <input type="text" value={name} onChange={e => setName(e.target.value)}
+              placeholder="Child's name..."
+              className="w-full p-4 bg-brand-50 rounded-2xl outline-none font-bold text-brand-900 mb-6"
+              autoFocus />
+
+            <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">Avatar</p>
+            <div className="flex flex-wrap gap-2 mb-6">
+              {CHILD_EMOJIS.map(e => (
+                <button key={e} onClick={() => setEmoji(e)}
+                  className={`w-12 h-12 rounded-2xl text-2xl flex items-center justify-center transition-all active:scale-90 ${
+                    emoji === e ? 'bg-brand-500 shadow-lg scale-110' : 'bg-white border border-slate-200'
+                  }`}>
+                  {e}
+                </button>
+              ))}
+            </div>
+
+            {/* Preview */}
+            <div className="bg-brand-50 p-4 rounded-2xl mb-6 flex items-center gap-3">
+              <span className="text-3xl">{emoji}</span>
+              <span className="font-black text-brand-900 text-lg">{name || 'Preview'}</span>
+            </div>
+
+            <button onClick={() => name.trim() && onSave({ name: name.trim(), emoji })}
+              disabled={!name.trim()}
+              className={`w-full py-5 rounded-3xl font-black uppercase shadow-xl transition-all ${
+                name.trim() ? 'bg-brand-500 text-white active:scale-95' : 'bg-slate-200 text-slate-400'
+              }`}>
+              {child ? 'Save Changes' : 'Add Child'}
+            </button>
+            <button onClick={onClose} className="w-full mt-3 py-3 text-neutral text-[10px] font-black uppercase">Cancel</button>
+          </div>
+        </Modal>
+      );
+    }
+
     // FoodFormModal: Edit a single food's details. Now shows computed preference
     // score and last 5 servings instead of a manual rating selector.
-    function FoodFormModal({ food, plans, servings, onSave, onDelete, onClose }) {
+    // Shows per-child preferences when multiple children exist.
+    function FoodFormModal({ food, plans, servings, onSave, onDelete, onClose, activeChildId, children: kids }) {
       const [name, setName] = useState(food.name || '');
       const [cats, setCats] = useState(food.categories || []);
       const [stock, setStock] = useState(food.stock || 'in');
       const [notes, setNotes] = useState(food.notes || '');
       const [confirmDelete, setConfirmDelete] = useState(false);
-      const exposures = calculateExposures(food.id, plans);
+      // Which child's preference to show (default: active child)
+      const [viewChildId, setViewChildId] = useState(activeChildId);
+
+      const myPlans = childPlans(plans, viewChildId);
+      const myServings = childServings(servings, viewChildId);
+
+      const exposures = calculateExposures(food.id, myPlans);
       const progress = Math.min(exposures / 15, 1);
 
-      // Compute the current preference score
-      const pref = getPreferenceScore(food.id, servings);
+      // Compute the current preference score for the viewed child
+      const pref = getPreferenceScore(food.id, myServings);
       // Get the last 5 servings for the history timeline
-      const recentServings = getRecentServings(food.id, servings, 5);
+      const recentServs = getRecentServings(food.id, myServings, 5);
 
       return (
         <Modal onClose={onClose}>
@@ -591,6 +1026,20 @@
               placeholder="Food name..." />
             {food.source === 'outside' && (
               <p className="text-[10px] font-bold text-neutral uppercase tracking-widest mb-4">Restaurant Discovery</p>
+            )}
+
+            {/* Child selector for viewing per-child preferences */}
+            {kids && kids.length > 1 && (
+              <div className="flex gap-2 mb-4 mt-2 overflow-x-auto no-scrollbar">
+                {kids.map(child => (
+                  <button key={child.id} onClick={() => setViewChildId(child.id)}
+                    className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                      viewChildId === child.id ? 'bg-brand-500 text-white' : 'bg-white border border-slate-200 text-neutral'
+                    }`}>
+                    <span>{child.emoji}</span> {child.name}
+                  </button>
+                ))}
+              </div>
             )}
 
             {/* Computed preference score display */}
@@ -609,11 +1058,11 @@
             )}
 
             {/* Last 5 servings timeline */}
-            {recentServings.length > 0 && (
+            {recentServs.length > 0 && (
               <div className="mb-6">
                 <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">Recent Servings</p>
                 <div className="space-y-1.5">
-                  {recentServings.map(s => {
+                  {recentServs.map(s => {
                     const opt = EATEN_OPTIONS.find(e => e.id === s.eaten);
                     return (
                       <div key={s.id} className={`flex items-center justify-between p-3 rounded-xl border ${opt?.bg || 'bg-white border-slate-100'}`}>
@@ -912,19 +1361,26 @@
     }
 
     // ShoppingListView: Generates a shopping list from foods that are low/out
-    // of stock. Uses computed preference scores to exclude disliked foods.
-    function ShoppingListView({ foods, plans, servings, dismissed, dispatch }) {
+    // of stock. Now excludes foods disliked by ALL children (not just one).
+    function ShoppingListView({ foods, plans, servings, dismissed, dispatch, children: kids }) {
       const items = useMemo(() => {
         return foods
           .filter(f => {
             if (f.stock === 'in' || f.source === 'outside') return false;
             if ((dismissed || []).includes(f.id)) return false;
-            // Exclude foods the child dislikes (computed from servings)
-            const { ratingId } = getPreferenceScore(f.id, servings);
-            return ratingId !== 'dislikes';
+            // Exclude foods disliked by ALL children (universally disliked)
+            if (kids && kids.length > 0) {
+              const allDislike = kids.every(child => {
+                const cServings = childServings(servings, child.id);
+                const { ratingId } = getPreferenceScore(f.id, cServings);
+                return ratingId === 'dislikes';
+              });
+              if (allDislike) return false;
+            }
+            return true;
           })
           .sort((a, b) => a.name.localeCompare(b.name));
-      }, [foods, dismissed, servings]);
+      }, [foods, dismissed, servings, kids]);
 
       const grouped = useMemo(() => {
         const groups = {};
@@ -1008,7 +1464,7 @@
       );
     }
 
-    // DataModal: Export/Import all data including servings
+    // DataModal: Export/Import all data including servings, children, and settings
     function DataModal({ state, dispatch, onClose }) {
       const [importing, setImporting] = useState(false);
       const [importError, setImportError] = useState(null);
@@ -1017,7 +1473,7 @@
 
       const handleExport = () => {
         const exportData = {
-          version: 3, // v3 includes servings
+          version: 4, // v4 includes children and settings
           exportedAt: new Date().toISOString(),
           foods: state.foods,
           plans: state.plans,
@@ -1025,6 +1481,8 @@
           foodMemory: state.foodMemory,
           shoppingDismissed: state.shoppingDismissed,
           servings: state.servings,
+          children: state.children,
+          settings: state.settings,
         };
         const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -1047,12 +1505,16 @@
         const reader = new FileReader();
         reader.onload = (evt) => {
           try {
-            const data = JSON.parse(evt.target.result);
+            let data = JSON.parse(evt.target.result);
             if (!data.foods || !Array.isArray(data.foods)) {
               throw new Error('Invalid backup file — missing foods array.');
             }
             if (data.plans && !Array.isArray(data.plans)) {
               throw new Error('Invalid backup file — plans is not an array.');
+            }
+            // If importing v3 or earlier, run multi-child migration
+            if (!data.children || data.children.length === 0) {
+              data = migrateToMultiChild(data);
             }
             dispatch({ type: 'IMPORT_DATA', payload: data });
             setImportSuccess(true);
@@ -1075,18 +1537,22 @@
             <h2 className="text-2xl font-black text-brand-900 mb-1">Your Data</h2>
             <p className="text-[10px] font-black text-neutral uppercase tracking-widest mb-6">Export & Import</p>
             <div className="bg-brand-50 rounded-2xl p-5 mb-6">
-              <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="grid grid-cols-4 gap-3 text-center">
                 <div>
                   <p className="text-2xl font-black text-brand-500">{state.foods.length}</p>
                   <p className="text-[8px] font-black text-neutral uppercase">Foods</p>
                 </div>
                 <div>
                   <p className="text-2xl font-black text-brand-500">{state.plans.length}</p>
-                  <p className="text-[8px] font-black text-neutral uppercase">Meal Plans</p>
+                  <p className="text-[8px] font-black text-neutral uppercase">Plans</p>
                 </div>
                 <div>
                   <p className="text-2xl font-black text-brand-500">{state.servings.length}</p>
                   <p className="text-[8px] font-black text-neutral uppercase">Servings</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-black text-brand-500">{state.children.length}</p>
+                  <p className="text-[8px] font-black text-neutral uppercase">Kids</p>
                 </div>
               </div>
             </div>
@@ -1120,28 +1586,67 @@
       );
     }
 
-    // MealCheckInModal: Per-meal check-in flow. Shows each food from a specific
-    // meal and lets the user tap None / Some / All for each one.
-    function MealCheckInModal({ meal, plans, foods, servings, dispatch, onClose }) {
+    // MealCheckInModal: Per-meal check-in flow. When multiple children have the
+    // same meal, shows all children together for fast side-by-side logging.
+    // When only one child (or independent meals), shows the classic single-child flow.
+    function MealCheckInModal({ meal, plans, foods, servings, dispatch, onClose, activeChildId, children: kids, settings }) {
       const tStr = getTodayStr();
-      const plan = plans.find(p => p.date === tStr && p.meal === meal);
-      const mealFoods = (plan?.foodIds || []).map(id => foods.find(f => f.id === id)).filter(Boolean);
 
-      // Track the user's selections: { foodId: 'none'|'some'|'all' }
+      // Determine which children need check-in for this meal
+      const childrenToCheck = useMemo(() => {
+        return (kids || []).filter(child => {
+          const cPlans = childPlans(plans, child.id);
+          const cServings = childServings(servings, child.id);
+          const plan = cPlans.find(p => p.date === tStr && p.meal === meal);
+          if (!plan || plan.foodIds.length === 0) return false;
+          const hasServings = plan.foodIds.some(fid =>
+            cServings.some(s => s.foodId === fid && s.date === tStr && s.meal === meal)
+          );
+          return !hasServings;
+        });
+      }, [kids, plans, servings, tStr, meal]);
+
+      // If only one child or independent meals, use single-child mode
+      const multiMode = childrenToCheck.length > 1;
+
+      // Collect all unique foods across all children being checked in
+      const allFoodIds = useMemo(() => {
+        const ids = new Set();
+        childrenToCheck.forEach(child => {
+          const plan = plans.find(p => p.date === tStr && p.meal === meal && p.childId === child.id);
+          (plan?.foodIds || []).forEach(id => ids.add(id));
+        });
+        return [...ids];
+      }, [childrenToCheck, plans, tStr, meal]);
+
+      const allFoods = allFoodIds.map(id => foods.find(f => f.id === id)).filter(Boolean);
+
+      // Track selections: { `${childId}-${foodId}`: eaten }
       const [selections, setSelections] = useState({});
-      // How many foods have been logged so far
-      const loggedCount = Object.keys(selections).length;
-      const allDone = loggedCount === mealFoods.length;
 
-      const handleSelect = (foodId, eaten) => {
-        setSelections(prev => ({ ...prev, [foodId]: eaten }));
+      // Count how many entries we need total
+      const totalNeeded = useMemo(() => {
+        let count = 0;
+        childrenToCheck.forEach(child => {
+          const plan = plans.find(p => p.date === tStr && p.meal === meal && p.childId === child.id);
+          count += (plan?.foodIds || []).length;
+        });
+        return count;
+      }, [childrenToCheck, plans, tStr, meal]);
+
+      const loggedCount = Object.keys(selections).length;
+      const allDone = loggedCount === totalNeeded;
+
+      const handleSelect = (childId, foodId, eaten) => {
+        setSelections(prev => ({ ...prev, [`${childId}-${foodId}`]: eaten }));
       };
 
       // Save all selections as serving records
       const handleSave = () => {
-        const entries = Object.entries(selections).map(([foodId, eaten]) => ({
-          foodId, date: tStr, meal, eaten
-        }));
+        const entries = Object.entries(selections).map(([key, eaten]) => {
+          const [childId, foodId] = key.split('-');
+          return { foodId, date: tStr, meal, childId, eaten };
+        });
         if (entries.length > 0) {
           dispatch({ type: 'LOG_SERVINGS_BATCH', entries });
         }
@@ -1153,37 +1658,84 @@
           <div className="p-8">
             <h2 className="text-2xl font-black text-brand-900 mb-1 capitalize">How was {meal}?</h2>
             <p className="text-[10px] font-black text-neutral uppercase tracking-widest mb-6">
-              {loggedCount} of {mealFoods.length} logged
+              {loggedCount} of {totalNeeded} logged
             </p>
 
-            <div className="space-y-4">
-              {mealFoods.map(f => {
-                const selected = selections[f.id];
-                return (
+            {multiMode ? (
+              /* Multi-child mode: show each food with per-child eaten toggles */
+              <div className="space-y-4">
+                {allFoods.map(f => (
                   <div key={f.id} className="bg-brand-50 rounded-2xl p-5 border border-brand-100">
                     <p className="font-black text-brand-900 mb-3">{f.name}</p>
-                    <div className="flex gap-2">
-                      {EATEN_OPTIONS.map(opt => {
-                        const isSelected = selected === opt.id;
+                    <div className="space-y-2">
+                      {childrenToCheck.map(child => {
+                        // Only show this food for children who actually have it in their meal
+                        const plan = plans.find(p => p.date === tStr && p.meal === meal && p.childId === child.id);
+                        if (!plan?.foodIds.includes(f.id)) return null;
+                        const key = `${child.id}-${f.id}`;
+                        const selected = selections[key];
                         return (
-                          <button key={opt.id}
-                            onClick={() => handleSelect(f.id, opt.id)}
-                            className={`flex-1 py-3 rounded-xl border-2 flex flex-col items-center gap-1 transition-all active:scale-95 ${
-                              isSelected
-                                ? `${opt.bg} border-current ring-1 ring-current scale-[1.02]`
-                                : 'bg-white border-slate-200 opacity-40'
-                            }`}
-                          >
-                            <i className={`${opt.icon} ${opt.color} text-2xl`}></i>
-                            <span className="text-[9px] font-black uppercase">{opt.label}</span>
-                          </button>
+                          <div key={child.id} className="flex items-center gap-2">
+                            <span className="text-lg w-8 text-center">{child.emoji}</span>
+                            <div className="flex gap-1.5 flex-1">
+                              {EATEN_OPTIONS.map(opt => {
+                                const isSelected = selected === opt.id;
+                                return (
+                                  <button key={opt.id}
+                                    onClick={() => handleSelect(child.id, f.id, opt.id)}
+                                    className={`flex-1 py-2 rounded-lg border text-center transition-all active:scale-95 ${
+                                      isSelected
+                                        ? `${opt.bg} border-current`
+                                        : 'bg-white border-slate-200 opacity-30'
+                                    }`}>
+                                    <i className={`${opt.icon} ${opt.color} text-lg`}></i>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
                         );
                       })}
                     </div>
                   </div>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            ) : (
+              /* Single-child mode: classic flow */
+              <div className="space-y-4">
+                {childrenToCheck.map(child => {
+                  const plan = plans.find(p => p.date === tStr && p.meal === meal && p.childId === child.id);
+                  const mealFoods = (plan?.foodIds || []).map(id => foods.find(f => f.id === id)).filter(Boolean);
+                  return mealFoods.map(f => {
+                    const key = `${child.id}-${f.id}`;
+                    const selected = selections[key];
+                    return (
+                      <div key={key} className="bg-brand-50 rounded-2xl p-5 border border-brand-100">
+                        <p className="font-black text-brand-900 mb-3">{f.name}</p>
+                        <div className="flex gap-2">
+                          {EATEN_OPTIONS.map(opt => {
+                            const isSelected = selected === opt.id;
+                            return (
+                              <button key={opt.id}
+                                onClick={() => handleSelect(child.id, f.id, opt.id)}
+                                className={`flex-1 py-3 rounded-xl border-2 flex flex-col items-center gap-1 transition-all active:scale-95 ${
+                                  isSelected
+                                    ? `${opt.bg} border-current ring-1 ring-current scale-[1.02]`
+                                    : 'bg-white border-slate-200 opacity-40'
+                                }`}
+                              >
+                                <i className={`${opt.icon} ${opt.color} text-2xl`}></i>
+                                <span className="text-[9px] font-black uppercase">{opt.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  });
+                })}
+              </div>
+            )}
 
             <button onClick={handleSave}
               disabled={!allDone}
@@ -1192,7 +1744,7 @@
                   ? 'bg-brand-500 text-white active:scale-95'
                   : 'bg-slate-200 text-slate-400 cursor-not-allowed'
               }`}>
-              {allDone ? 'Save' : `${mealFoods.length - loggedCount} remaining`}
+              {allDone ? 'Save' : `${totalNeeded - loggedCount} remaining`}
             </button>
             <button onClick={onClose} className="w-full mt-3 py-3 text-neutral text-[10px] font-black uppercase">
               Finish Later
@@ -1202,14 +1754,23 @@
       );
     }
 
-    // DiscoveryModal: Log a restaurant discovery with an initial eating rating
-    function DiscoveryModal({ dispatch, onClose }) {
+    // DiscoveryModal: Log a restaurant discovery with an initial eating rating.
+    // Now supports multi-child: can select which children tried the food.
+    function DiscoveryModal({ dispatch, onClose, activeChildId, children: kids, settings }) {
       const [name, setName] = useState('');
       const [eaten, setEaten] = useState(null);
+      // Track which children tried this discovery — default all if sameMealDefault
+      const [selectedKids, setSelectedKids] = useState(
+        settings?.sameMealDefault && kids.length > 1 ? kids.map(c => c.id) : [activeChildId]
+      );
+
+      const toggleChild = (id) => {
+        setSelectedKids(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+      };
 
       const handleSave = () => {
         if (!name.trim()) return;
-        dispatch({ type: 'DISCOVER_FOOD', name, eaten });
+        dispatch({ type: 'DISCOVER_FOOD', name, eaten, childIds: selectedKids });
         onClose();
       };
 
@@ -1222,6 +1783,26 @@
               <input autoFocus type="text" value={name} onChange={e => setName(e.target.value)}
                 placeholder="Food Name..."
                 className="w-full p-4 bg-brand-50 rounded-2xl outline-none font-bold" />
+
+              {/* Which children tried it? (only shown if 2+ children) */}
+              {kids.length > 1 && (
+                <div>
+                  <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">Who tried it?</p>
+                  <div className="flex gap-2 flex-wrap">
+                    {kids.map(child => {
+                      const sel = selectedKids.includes(child.id);
+                      return (
+                        <button key={child.id} onClick={() => toggleChild(child.id)}
+                          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-bold transition-all active:scale-95 ${
+                            sel ? 'bg-brand-500 text-white' : 'bg-white border border-slate-200 text-neutral'
+                          }`}>
+                          <span>{child.emoji}</span> {child.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* How much did they eat? */}
               <div>
