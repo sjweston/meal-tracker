@@ -481,10 +481,90 @@
     // MAIN VIEWS
     // ==========================================================================
 
+    // TutorialModal: Walks new users through what the app does and how to use it.
+    // Shown via the "?" button on the home screen or on first launch.
+    function TutorialModal({ onClose }) {
+      const [step, setStep] = useState(0);
+      const steps = [
+        {
+          icon: 'ph-fill ph-package',
+          title: 'Build Your Pantry',
+          body: 'Start by adding the foods your family eats. Categorize them as carb, protein, fruit, veggie, or snack — this helps track meal balance.',
+          color: 'text-brand-500',
+        },
+        {
+          icon: 'ph-fill ph-calendar-blank',
+          title: 'Plan Meals',
+          body: 'Use the Planner tab to add foods to breakfast, lunch, dinner, and snacks. Save time with Combos — reusable meal templates.',
+          color: 'text-brand-500',
+        },
+        {
+          icon: 'ph-fill ph-check-circle',
+          title: 'Check In After Meals',
+          body: 'After each meal, tap "How was lunch?" to log how much was eaten: None, Some, or All. This builds preference data over time.',
+          color: 'text-brand-500',
+        },
+        {
+          icon: 'ph-fill ph-chart-line-up',
+          title: 'Track Exposure',
+          body: 'Research shows it takes ~15 exposures for a child to accept a new food. The app tracks this automatically — keep serving, even if they say no!',
+          color: 'text-accent',
+        },
+        {
+          icon: 'ph-fill ph-heart',
+          title: 'Watch Preferences Emerge',
+          body: 'Preferences are computed from eating history, not guesswork. Over time you\'ll see which foods are Loved, Liked, Meh, or Disliked — and watch them change.',
+          color: 'text-accent',
+        },
+        {
+          icon: 'ph-fill ph-users-three',
+          title: 'Multiple Kids? No Problem',
+          body: 'Add children in the Family tab. Plan the same meal for everyone, then make per-kid tweaks. Each child gets their own preference profile.',
+          color: 'text-brand-900',
+        },
+      ];
+      const s = steps[step];
+      const isLast = step === steps.length - 1;
+
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-8 text-center">
+            {/* Progress dots */}
+            <div className="flex justify-center gap-2 mb-8">
+              {steps.map((_, i) => (
+                <div key={i} className={`h-1.5 rounded-full transition-all ${i === step ? 'w-8 bg-brand-500' : 'w-1.5 bg-slate-200'}`} />
+              ))}
+            </div>
+
+            <i className={`${s.icon} ${s.color} text-6xl mb-4`}></i>
+            <h2 className="text-2xl font-black text-brand-900 mb-3">{s.title}</h2>
+            <p className="text-sm text-neutral font-bold leading-relaxed mb-8">{s.body}</p>
+
+            <div className="flex gap-3">
+              {step > 0 && (
+                <button onClick={() => setStep(step - 1)}
+                  className="flex-1 py-4 border-2 border-slate-200 rounded-2xl font-black uppercase text-[10px] text-neutral active:scale-95">
+                  Back
+                </button>
+              )}
+              <button onClick={() => isLast ? onClose() : setStep(step + 1)}
+                className="flex-[2] py-4 bg-brand-500 text-white rounded-2xl font-black uppercase shadow-lg active:scale-95">
+                {isLast ? 'Get Started' : 'Next'}
+              </button>
+            </div>
+            {!isLast && (
+              <button onClick={onClose} className="w-full mt-3 py-2 text-neutral text-[10px] font-black uppercase">Skip</button>
+            )}
+          </div>
+        </Modal>
+      );
+    }
+
     function TodayView({ foods, plans, servings, state, dispatch, setQuickSort, activeChildId, children: kids }) {
       const [checkInMeal, setCheckInMeal] = useState(null);
       const [restaurantMode, setRestaurantMode] = useState(false);
       const [showData, setShowData] = useState(false);
+      const [showTutorial, setShowTutorial] = useState(false);
       const tStr = getTodayStr();
 
       // Filter plans and servings by active child
@@ -492,12 +572,10 @@
       const myServings = childServings(servings, activeChildId);
 
       // Find meals that have planned foods but no servings logged yet today.
-      // These are the meals that need a check-in.
       const uncheckedMeals = useMemo(() => {
         return MEALS.filter(meal => {
           const plan = myPlans.find(p => p.date === tStr && p.meal === meal);
           if (!plan || plan.foodIds.length === 0) return false;
-          // Check if ANY food in this meal already has a serving logged for today
           const hasServings = plan.foodIds.some(fid =>
             myServings.some(s => s.foodId === fid && s.date === tStr && s.meal === meal)
           );
@@ -505,27 +583,6 @@
         });
       }, [myPlans, myServings, tStr]);
 
-      // Balanced streak — computed for the active child
-      const streak = useMemo(() => {
-        let count = 0; let d = new Date();
-        while (true) {
-          const dStr = d.toLocaleDateString('en-CA');
-          const dayPlans = myPlans.filter(p => p.date === dStr && p.meal !== 'snack');
-          if (dayPlans.length === 0) break;
-          const covered = new Set();
-          dayPlans.forEach(p => p.foodIds.forEach(fid => foods.find(f => f.id === fid)?.categories?.forEach(c => covered.add(c))));
-          if (BALANCE_CATEGORIES.every(c => covered.has(c))) { count++; d.setDate(d.getDate() - 1); } else break;
-        }
-        return count;
-      }, [myPlans, foods]);
-
-      // Helper to check if a food is "disliked" by the active child
-      const isDisliked = (f) => {
-        const { ratingId } = getPreferenceScore(f.id, myServings);
-        return ratingId === 'dislikes';
-      };
-
-      // Active child's name for display
       const activeChild = kids.find(c => c.id === activeChildId);
 
       // For multi-child check-in: find which children need checking in for a meal
@@ -542,58 +599,188 @@
         });
       };
 
+      // --- Exposure-focused stats ---
+      // Foods approaching acceptance: 10-14 exposures (almost at the 15-try threshold)
+      const approachingAcceptance = useMemo(() => {
+        return foods
+          .filter(f => {
+            const exp = calculateExposures(f.id, myPlans);
+            return exp >= 10 && exp < 15;
+          })
+          .map(f => ({ ...f, exposures: calculateExposures(f.id, myPlans) }))
+          .sort((a, b) => b.exposures - a.exposures)
+          .slice(0, 4); // Show top 4 closest to acceptance
+      }, [foods, myPlans]);
+
+      // Total accepted foods count (15+ exposures)
+      const acceptedCount = useMemo(() => {
+        return foods.filter(f => calculateExposures(f.id, myPlans) >= 15).length;
+      }, [foods, myPlans]);
+
+      // --- Shopping urgency ---
+      // Foods that are out/low and are favorites (loved or liked)
+      const shoppingUrgent = useMemo(() => {
+        const needsShopping = foods.filter(f =>
+          f.stock !== 'in' && f.source !== 'outside' && !(state.shoppingDismissed || []).includes(f.id)
+        );
+        const favorites = needsShopping.filter(f => {
+          const { ratingId } = getPreferenceScore(f.id, myServings);
+          return ratingId === 'loves' || ratingId === 'likes';
+        });
+        const total = needsShopping.length;
+        return { favorites, total };
+      }, [foods, myServings, state.shoppingDismissed]);
+
+      // --- Unplanned meals tomorrow ---
+      const tomorrowStr = useMemo(() => {
+        const d = new Date(); d.setDate(d.getDate() + 1);
+        return d.toLocaleDateString('en-CA');
+      }, []);
+      const unplannedTomorrow = useMemo(() => {
+        return ['breakfast', 'lunch', 'dinner'].filter(meal => {
+          const plan = myPlans.find(p => p.date === tomorrowStr && p.meal === meal);
+          return !plan || plan.foodIds.length === 0;
+        });
+      }, [myPlans, tomorrowStr]);
+
       return (
         <div className="animate-in pb-24">
-          <div className="bg-brand-500 rounded-[2.5rem] p-8 text-white shadow-xl mb-6 relative overflow-hidden">
-            <h2 className="text-5xl font-black mb-1">{streak} Days</h2>
-            <p className="text-brand-100 font-bold uppercase tracking-widest text-[10px] opacity-80">
-              {kids.length > 1 ? `${activeChild?.emoji || ''} ${activeChild?.name || ''}'s Balanced Streak` : 'Balanced Streak'}
-            </p>
-            <div className="absolute top-6 right-6 flex gap-2">
-              <button onClick={() => setShowData(true)} className="w-10 h-10 bg-brand-900/60 rounded-full flex items-center justify-center shadow-lg active:scale-90"><i className="ph ph-gear"></i></button>
-              <button onClick={() => setQuickSort(true)} className="w-10 h-10 bg-brand-900 rounded-full flex items-center justify-center shadow-lg active:scale-90"><i className="ph-fill ph-lightning"></i></button>
+          {/* Header bar with action buttons */}
+          <div className="flex justify-between items-center mb-5">
+            <h2 className="text-3xl font-black text-brand-900 tracking-tight">
+              {kids.length > 1 ? `${activeChild?.emoji || ''} Today` : 'Today'}
+            </h2>
+            <div className="flex gap-2">
+              <button onClick={() => setShowTutorial(true)} className="w-10 h-10 bg-white border border-slate-200 rounded-full flex items-center justify-center active:scale-90">
+                <i className="ph-bold ph-question text-brand-500"></i>
+              </button>
+              <button onClick={() => setShowData(true)} className="w-10 h-10 bg-white border border-slate-200 rounded-full flex items-center justify-center active:scale-90">
+                <i className="ph ph-gear text-neutral"></i>
+              </button>
+              <button onClick={() => setQuickSort(true)} className="w-10 h-10 bg-brand-500 rounded-full flex items-center justify-center shadow-lg active:scale-90">
+                <i className="ph-fill ph-lightning text-white"></i>
+              </button>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100">
-              <p className="text-3xl font-black text-brand-500">{foods.filter(f => calculateExposures(f.id, myPlans) >= 15).length}</p>
-              <p className="text-[10px] font-bold text-neutral uppercase tracking-tighter">Accepted Foods</p>
+
+          {/* ---- SECTION 1: Meal check-ins (most time-sensitive) ---- */}
+          {uncheckedMeals.length > 0 && (
+            <div className="space-y-3 mb-6">
+              {uncheckedMeals.map(meal => {
+                const uncheckedKids = getUncheckedChildren(meal);
+                return (
+                  <button key={meal} onClick={() => setCheckInMeal(meal)}
+                    className="w-full bg-brand-900 text-white p-6 rounded-[2.5rem] shadow-xl flex items-center justify-between active:scale-95 transition-all">
+                    <div className="text-left">
+                      <p className="text-xl font-black text-white capitalize">How was {meal}?</p>
+                      <p className="text-xs opacity-60 font-bold uppercase tracking-widest mt-1">
+                        {kids.length > 1 && uncheckedKids.length > 0
+                          ? `${uncheckedKids.map(c => c.emoji).join(' ')} needs logging`
+                          : 'Log what was eaten'}
+                      </p>
+                    </div>
+                    <i className="ph ph-arrow-circle-right text-white text-2xl"></i>
+                  </button>
+                );
+              })}
             </div>
-            <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100">
-              <p className="text-3xl font-black text-accent">{foods.filter(f => f.stock !== 'in' && !isDisliked(f) && f.source !== 'outside').length}</p>
-              <p className="text-[10px] font-bold text-neutral uppercase tracking-tighter">Shopping Items</p>
-            </div>
-          </div>
-          <div className="space-y-3">
-            <button onClick={() => setRestaurantMode(true)} className="w-full bg-white border border-brand-100 p-6 rounded-[2rem] shadow-sm flex items-center justify-between active:scale-95 transition-all">
-              <div className="text-left">
-                <p className="text-lg font-black text-brand-900">Dining Out?</p>
-                <p className="text-xs text-neutral font-bold opacity-60">Log a restaurant discovery</p>
+          )}
+
+          {/* ---- SECTION 2: Planning nudge (tomorrow's gaps) ---- */}
+          {unplannedTomorrow.length > 0 && (
+            <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-amber-100 mb-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-amber-50 rounded-full flex items-center justify-center">
+                  <i className="ph-fill ph-calendar-blank text-amber-500 text-xl"></i>
+                </div>
+                <div>
+                  <p className="font-black text-brand-900 text-sm">Tomorrow needs planning</p>
+                  <p className="text-[10px] font-bold text-neutral uppercase">
+                    {unplannedTomorrow.map(m => m.charAt(0).toUpperCase() + m.slice(1)).join(', ')} empty
+                  </p>
+                </div>
               </div>
-              <i className="ph ph-plus-circle text-brand-500 text-2xl"></i>
-            </button>
-            {/* Per-meal check-in buttons — one for each meal that needs logging */}
-            {uncheckedMeals.map(meal => {
-              const uncheckedKids = getUncheckedChildren(meal);
-              return (
-                <button key={meal} onClick={() => setCheckInMeal(meal)}
-                  className="w-full bg-brand-900 text-white p-7 rounded-[2.5rem] shadow-xl flex items-center justify-between active:scale-95 transition-all">
-                  <div className="text-left">
-                    <p className="text-xl font-black text-white capitalize">How was {meal}?</p>
-                    <p className="text-xs opacity-60 font-bold uppercase tracking-widest mt-1">
-                      {kids.length > 1 && uncheckedKids.length > 0
-                        ? `${uncheckedKids.map(c => c.emoji).join(' ')} needs logging`
-                        : 'Log what was eaten'}
-                    </p>
+              <i className="ph ph-caret-right text-neutral"></i>
+            </div>
+          )}
+
+          {/* ---- SECTION 3: Exposure progress (the real value of the app) ---- */}
+          {approachingAcceptance.length > 0 && (
+            <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 mb-4">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <p className="font-black text-brand-900 text-sm">Almost Accepted</p>
+                  <p className="text-[10px] font-bold text-neutral uppercase">Close to 15 exposures</p>
+                </div>
+                <div className="w-10 h-10 bg-brand-50 rounded-full flex items-center justify-center">
+                  <i className="ph-fill ph-trend-up text-brand-500 text-xl"></i>
+                </div>
+              </div>
+              <div className="space-y-3">
+                {approachingAcceptance.map(f => (
+                  <div key={f.id}>
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-sm font-bold">{f.name}</span>
+                      <span className="text-[10px] font-black text-brand-500">{f.exposures}/15</span>
+                    </div>
+                    <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-brand-500 rounded-full transition-all"
+                        style={{ width: `${(f.exposures / 15) * 100}%` }} />
+                    </div>
                   </div>
-                  <i className="ph ph-arrow-circle-right text-white text-2xl"></i>
-                </button>
-              );
-            })}
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ---- SECTION 4: Stat cards row ---- */}
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            {/* Accepted foods count */}
+            <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100">
+              <div className="flex items-center gap-2 mb-1">
+                <i className="ph-fill ph-seal-check text-brand-500 text-lg"></i>
+                <p className="text-[10px] font-bold text-neutral uppercase tracking-tighter">Accepted</p>
+              </div>
+              <p className="text-3xl font-black text-brand-500">{acceptedCount}</p>
+              <p className="text-[10px] text-neutral font-bold opacity-50">15+ exposures</p>
+            </div>
+            {/* Shopping urgency */}
+            <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100">
+              <div className="flex items-center gap-2 mb-1">
+                <i className="ph-fill ph-shopping-cart text-accent text-lg"></i>
+                <p className="text-[10px] font-bold text-neutral uppercase tracking-tighter">To Buy</p>
+              </div>
+              <p className="text-3xl font-black text-accent">{shoppingUrgent.total}</p>
+              {shoppingUrgent.favorites.length > 0 && (
+                <p className="text-[10px] text-accent font-bold">{shoppingUrgent.favorites.length} favorite{shoppingUrgent.favorites.length !== 1 ? 's' : ''} running low</p>
+              )}
+              {shoppingUrgent.favorites.length === 0 && (
+                <p className="text-[10px] text-neutral font-bold opacity-50">items needed</p>
+              )}
+            </div>
           </div>
+
+          {/* ---- SECTION 5: Quick actions ---- */}
+          <div className="space-y-3">
+            <button onClick={() => setRestaurantMode(true)} className="w-full bg-white border border-brand-100 p-5 rounded-[2rem] shadow-sm flex items-center justify-between active:scale-95 transition-all">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-brand-50 rounded-full flex items-center justify-center">
+                  <i className="ph-fill ph-fork-knife text-brand-500 text-xl"></i>
+                </div>
+                <div className="text-left">
+                  <p className="font-black text-brand-900">Dining Out?</p>
+                  <p className="text-[10px] text-neutral font-bold opacity-60">Log a restaurant discovery</p>
+                </div>
+              </div>
+              <i className="ph ph-plus-circle text-brand-500 text-xl"></i>
+            </button>
+          </div>
+
+          {/* Modals */}
           {restaurantMode && <DiscoveryModal dispatch={dispatch} onClose={() => setRestaurantMode(false)} activeChildId={activeChildId} children={kids} settings={state.settings} />}
           {checkInMeal && <MealCheckInModal meal={checkInMeal} plans={plans} foods={foods} servings={servings} dispatch={dispatch} onClose={() => setCheckInMeal(null)} activeChildId={activeChildId} children={kids} settings={state.settings} />}
           {showData && <DataModal state={state} dispatch={dispatch} onClose={() => setShowData(false)} />}
+          {showTutorial && <TutorialModal onClose={() => setShowTutorial(false)} />}
         </div>
       );
     }
