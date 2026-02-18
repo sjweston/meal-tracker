@@ -148,6 +148,15 @@
         }
         case 'DISMISS_SHOPPING': return { ...state, shoppingDismissed: [...(state.shoppingDismissed || []), action.id] };
         case 'DELETE_FOOD': return { ...state, foods: state.foods.filter(f => f.id !== action.id) };
+        // Import replaces all data stores from an uploaded JSON backup
+        case 'IMPORT_DATA': return {
+          ...state,
+          foods: action.payload.foods || [],
+          plans: action.payload.plans || [],
+          combos: action.payload.combos || [],
+          foodMemory: action.payload.foodMemory || {},
+          shoppingDismissed: action.payload.shoppingDismissed || [],
+        };
         default: return state;
       }
     };
@@ -168,9 +177,10 @@
     // MAIN VIEWS
     // ==========================================================================
 
-    function TodayView({ foods, plans, dispatch, setQuickSort }) {
+    function TodayView({ foods, plans, state, dispatch, setQuickSort }) {
       const [review, setReview] = useState(false);
       const [restaurantMode, setRestaurantMode] = useState(false);
+      const [showData, setShowData] = useState(false);
       const tStr = getTodayStr();
       const unrated = useMemo(() => {
         const todaysPlan = plans.filter(p => p.date === tStr);
@@ -195,7 +205,10 @@
           <div className="bg-brand-500 rounded-[2.5rem] p-8 text-white shadow-xl mb-6 relative overflow-hidden">
             <h2 className="text-5xl font-black mb-1">{streak} Days</h2>
             <p className="text-brand-100 font-bold uppercase tracking-widest text-[10px] opacity-80">Balanced Streak 🔥</p>
-            <button onClick={() => setQuickSort(true)} className="absolute top-6 right-6 w-10 h-10 bg-brand-900 rounded-full flex items-center justify-center shadow-lg active:scale-90"><i className="ph ph-lightning-fill"></i></button>
+            <div className="absolute top-6 right-6 flex gap-2">
+              <button onClick={() => setShowData(true)} className="w-10 h-10 bg-brand-900/60 rounded-full flex items-center justify-center shadow-lg active:scale-90"><i className="ph ph-gear"></i></button>
+              <button onClick={() => setQuickSort(true)} className="w-10 h-10 bg-brand-900 rounded-full flex items-center justify-center shadow-lg active:scale-90"><i className="ph ph-lightning-fill"></i></button>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4 mb-6">
             <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100"><p className="text-3xl font-black text-brand-500">{foods.filter(f => calculateExposures(f.id, plans) >= 15).length}</p><p className="text-[10px] font-bold text-neutral uppercase tracking-tighter">Accepted Foods</p></div>
@@ -207,6 +220,7 @@
           </div>
           {restaurantMode && <DiscoveryModal onSave={(d) => { dispatch({type:'DISCOVER_FOOD', ...d}); setRestaurantMode(false); }} onClose={() => setRestaurantMode(false)} />}
           {review && <ReviewModal unrated={unrated} onSave={(id, rating) => dispatch({type:'UPDATE_FOOD', id, updates:{rating}})} onClose={() => setReview(false)} />}
+          {showData && <DataModal state={state} dispatch={dispatch} onClose={() => setShowData(false)} />}
         </div>
       );
     }
@@ -292,7 +306,7 @@
       return (
         <div className="min-h-screen flex flex-col pt-8">
           <main className="flex-1 max-w-md mx-auto w-full p-6">
-            {tab === 'today' && <TodayView foods={state.foods} plans={state.plans} dispatch={dispatch} setQuickSort={setQuickSort} />}
+            {tab === 'today' && <TodayView foods={state.foods} plans={state.plans} state={state} dispatch={dispatch} setQuickSort={setQuickSort} />}
             {tab === 'pantry' && <ListView foods={state.foods.filter(f => f.stock !== 'out' && f.source !== 'outside')} plans={state.plans} title="Pantry" selectionIds={pSelect} setSelectionIds={setPSelect} onEdit={setEdit} dispatch={dispatch} />}
             {tab === 'library' && <ListView foods={state.foods} plans={state.plans} title="Library" selectionIds={lSelect} setSelectionIds={setLSelect} onEdit={setEdit} dispatch={dispatch} showBatch />}
             {tab === 'planner' && <MealPlannerView foods={state.foods} plans={state.plans} combos={state.combos} dispatch={dispatch} />}
@@ -666,6 +680,145 @@
             </>
           )}
         </div>
+      );
+    }
+
+    // DataModal: Export all data as a JSON file or import a previously
+    // exported backup. Handles file download/upload and validation.
+    function DataModal({ state, dispatch, onClose }) {
+      const [importing, setImporting] = useState(false);
+      const [importError, setImportError] = useState(null);
+      const [importSuccess, setImportSuccess] = useState(false);
+      const fileRef = useRef(null);
+
+      // Export: bundle all data stores into a JSON blob and trigger download
+      const handleExport = () => {
+        const exportData = {
+          version: 2,
+          exportedAt: new Date().toISOString(),
+          foods: state.foods,
+          plans: state.plans,
+          combos: state.combos,
+          foodMemory: state.foodMemory,
+          shoppingDismissed: state.shoppingDismissed,
+        };
+        // Create a temporary download link with the JSON blob
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const dateStr = new Date().toISOString().split('T')[0]; // e.g. 2026-02-17
+        a.href = url;
+        a.download = `meal-tracker-backup-${dateStr}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      };
+
+      // Import: read a JSON file, validate its shape, then dispatch to reducer
+      const handleImport = (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setImporting(true);
+        setImportError(null);
+        setImportSuccess(false);
+
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          try {
+            const data = JSON.parse(evt.target.result);
+
+            // Basic validation: must have a foods array at minimum
+            if (!data.foods || !Array.isArray(data.foods)) {
+              throw new Error('Invalid backup file — missing foods array.');
+            }
+            // Plans should also be an array if present
+            if (data.plans && !Array.isArray(data.plans)) {
+              throw new Error('Invalid backup file — plans is not an array.');
+            }
+
+            dispatch({ type: 'IMPORT_DATA', payload: data });
+            setImportSuccess(true);
+            setImporting(false);
+          } catch (err) {
+            setImportError(err.message || 'Failed to parse backup file.');
+            setImporting(false);
+          }
+        };
+        reader.onerror = () => {
+          setImportError('Could not read the file.');
+          setImporting(false);
+        };
+        reader.readAsText(file);
+      };
+
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-8">
+            <h2 className="text-2xl font-black text-brand-900 mb-1">Your Data</h2>
+            <p className="text-[10px] font-black text-neutral uppercase tracking-widest mb-6">Export & Import</p>
+
+            {/* Stats summary so the user knows what they're exporting */}
+            <div className="bg-brand-50 rounded-2xl p-5 mb-6">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-2xl font-black text-brand-500">{state.foods.length}</p>
+                  <p className="text-[8px] font-black text-neutral uppercase">Foods</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-black text-brand-500">{state.plans.length}</p>
+                  <p className="text-[8px] font-black text-neutral uppercase">Meal Plans</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-black text-brand-500">{(state.combos || []).length}</p>
+                  <p className="text-[8px] font-black text-neutral uppercase">Combos</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Export button */}
+            <button onClick={handleExport}
+              className="w-full bg-brand-500 text-white py-5 rounded-3xl font-black uppercase shadow-xl mb-3 flex items-center justify-center gap-2 active:scale-95 transition-all">
+              <i className="ph ph-download-simple text-lg"></i> Export Backup
+            </button>
+            <p className="text-[10px] text-neutral text-center mb-6 font-bold opacity-60">
+              Downloads a JSON file with all your data
+            </p>
+
+            {/* Import section */}
+            <div className="border-t border-slate-100 pt-6">
+              <button onClick={() => fileRef.current?.click()}
+                disabled={importing}
+                className="w-full bg-white border-2 border-dashed border-brand-500 text-brand-500 py-5 rounded-3xl font-black uppercase mb-3 flex items-center justify-center gap-2 active:scale-95 transition-all">
+                <i className="ph ph-upload-simple text-lg"></i>
+                {importing ? 'Importing...' : 'Import Backup'}
+              </button>
+              {/* Hidden file input triggered by the button above */}
+              <input ref={fileRef} type="file" accept=".json" onChange={handleImport} className="hidden" />
+              <p className="text-[10px] text-neutral text-center font-bold opacity-60">
+                Replaces all current data with the backup
+              </p>
+
+              {/* Import feedback messages */}
+              {importError && (
+                <div className="mt-4 bg-red-50 text-red-600 p-4 rounded-2xl text-xs font-bold text-center">
+                  <i className="ph ph-warning-circle mr-1"></i> {importError}
+                </div>
+              )}
+              {importSuccess && (
+                <div className="mt-4 bg-green-50 text-green-600 p-4 rounded-2xl text-xs font-bold text-center">
+                  <i className="ph ph-check-circle mr-1"></i> Data imported successfully!
+                </div>
+              )}
+            </div>
+
+            {/* Close button */}
+            <button onClick={onClose}
+              className="w-full mt-6 py-3 text-neutral text-[10px] font-black uppercase">
+              Close
+            </button>
+          </div>
+        </Modal>
       );
     }
 
