@@ -3,9 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Meal Tracker Sync</title>
+  <title>Meal Tracker</title>
+  <!-- Apple icon tags FIRST so Safari grabs them before anything else loads -->
   <link rel="apple-touch-icon" sizes="180x180" href="/meal-tracker/apple-touch-icon.png">
+  <link rel="apple-touch-icon-precomposed" sizes="180x180" href="/meal-tracker/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-title" content="Meals" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <link rel="manifest" href="/meal-tracker/manifest.json" />
   <meta name="theme-color" content="#167188" />
 
   <script src="https://cdn.tailwindcss.com"></script>
@@ -13,26 +18,6 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://unpkg.com/@phosphor-icons/web"></script>
-
-  <!-- Firebase SDKs -->
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-    import { getFirestore, doc, setDoc, onSnapshot, collection, query, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-    import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-
-    // --- PASTE YOUR FIREBASE CONFIG HERE ---
-    const firebaseConfig = {
-      apiKey: "AIzaSyCWPs2eVMJSCzG3f0YLMjL_PCT7ozYnCjM",
-    	authDomain: "cd-meal-tracker.firebaseapp.com",
-    	projectId: "cd-meal-tracker",
-    	storageBucket: "cd-meal-tracker.firebasestorage.app",
-    	messagingSenderId: "263676843677",
-    	appId: "1:263676843677:web:532e95fb0b879e9e67e674",
-    	measurementId: "G-R3DVDM36Z5"
-    };
-
-    window.FirebaseLib = { initializeApp, getFirestore, doc, setDoc, onSnapshot, collection, query, getDocs, writeBatch, getAuth, signInAnonymously };
-  </script>
 
   <script>
     tailwind.config = {
@@ -44,9 +29,14 @@
   </script>
   <style>
     body { padding-bottom: env(safe-area-inset-bottom); background: #f0f7f9; -webkit-tap-highlight-color: transparent; }
+    html { overscroll-behavior: none; }
+    button, nav { -webkit-user-select: none; user-select: none; }
     .animate-in { animation: fadeIn 0.3s ease-out; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
     .no-scrollbar::-webkit-scrollbar { display: none; }
+    .food-card { transition: all 0.1s ease; border-width: 2px; }
+    .food-card:active { transform: scale(0.98); }
+    .selected-card { border-color: #167188 !important; background-color: #daebf1 !important; }
   </style>
 </head>
 <body class="text-slate-800 tracking-tight">
@@ -55,15 +45,9 @@
   <script type="text/babel">
     const { useState, useEffect, useReducer, useCallback, useMemo, useRef } = React;
 
-    // --- FIREBASE SYNC HELPERS ---
-    const generateFamilyCode = () => {
-      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-      return Array.from({length: 6}, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
-    };
-
-    // --- DB WRAPPER (Local Fallback) ---
+    // --- DB WRAPPER ---
     const DB_NAME = 'MealTrackerDB';
-    const dbSaveLocal = async (key, data) => {
+    const dbSave = async (key, data) => {
       const request = indexedDB.open(DB_NAME, 1);
       request.onsuccess = (e) => {
         const db = e.target.result;
@@ -71,7 +55,7 @@
         tx.objectStore('appData').put(data, key);
       };
     };
-    const dbLoadLocal = (key, defaultValue) => {
+    const dbLoad = (key, defaultValue) => {
       return new Promise((resolve) => {
         const request = indexedDB.open(DB_NAME, 1);
         request.onupgradeneeded = (e) => e.target.result.createObjectStore('appData');
@@ -84,10 +68,10 @@
       });
     };
 
+    // --- Constants ---
     const generateId = () => Math.random().toString(36).substring(2, 15);
     const getTodayStr = () => new Date().toLocaleDateString('en-CA');
 
-    // (Constants CATEGORIES, RATINGS, EATEN_OPTIONS, etc. same as original)
     const CATEGORIES = [
       { id: 'carb', label: 'Carb', color: 'bg-amber-100 text-amber-800 border-amber-300', aisle: 'Pantry' },
       { id: 'protein', label: 'Protein', color: 'bg-red-100 text-red-800 border-red-300', aisle: 'Meat/Dairy' },
@@ -96,17 +80,24 @@
       { id: 'snack',   label: 'Snack',   color: 'bg-blue-100 text-blue-800 border-blue-300', aisle: 'Snacks' },
     ];
     const BALANCE_CATEGORIES = ['carb', 'protein', 'fruit', 'veggie'];
+
+    // Preference tiers derived from computed eating scores
+    // Score = average points from servings in last 6 months
+    // Points: none=0, some=5, all=10
     const RATINGS = [
       { id: 'loves',    icon: 'ph-fill ph-heart',        color: 'text-accent',    label: 'Loves',    min: 7.5 },
       { id: 'likes',    icon: 'ph-fill ph-thumbs-up',    color: 'text-brand-500', label: 'Likes',    min: 5 },
       { id: 'meh',      icon: 'ph-fill ph-minus-circle',  color: 'text-neutral',   label: 'Meh',      min: 2.5 },
       { id: 'dislikes', icon: 'ph-fill ph-thumbs-down',   color: 'text-brand-900', label: 'Dislikes', min: 0 },
     ];
+
+    // The three options for logging how much the child ate
     const EATEN_OPTIONS = [
       { id: 'none', label: 'None', points: 0,  icon: 'ph-fill ph-x-circle',     color: 'text-accent',    bg: 'bg-red-50 border-red-200' },
       { id: 'some', label: 'Some', points: 5,  icon: 'ph-fill ph-minus-circle',  color: 'text-amber-500', bg: 'bg-amber-50 border-amber-200' },
       { id: 'all',  label: 'All',  points: 10, icon: 'ph-fill ph-check-circle',  color: 'text-brand-500', bg: 'bg-brand-50 border-brand-200' },
     ];
+
     const STOCK_OPTIONS = [
       { id: 'in', label: 'In', icon: 'ph-bold ph-check-circle', color: 'text-brand-500' },
       { id: 'low', label: 'Low', icon: 'ph-bold ph-warning-diamond', color: 'text-neutral' },
@@ -114,197 +105,1926 @@
     ];
     const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
     const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+    // Emoji options for child avatars — quick visual ID in the UI
     const CHILD_EMOJIS = ['🦊', '🐸', '🐻', '🐰', '🦁', '🐱', '🐶', '🦄', '🐼', '🐨', '🦋', '🌟'];
 
-    // --- PREFERENCE HELPERS ---
+    // --- Preference Score Helpers ---
+
+    // Compute a preference score for a food based on its serving history.
+    // Returns { score, ratingId, rating } where rating is the full RATINGS object.
+    // If no servings exist, score is null and rating is null.
     const getPreferenceScore = (foodId, servings) => {
+      // Calculate the date 6 months ago for filtering
       const sixMonthsAgo = new Date();
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
       const cutoff = sixMonthsAgo.toLocaleDateString('en-CA');
-      const recent = (servings || []).filter(s => s.foodId === foodId && s.date >= cutoff);
+
+      // Get all servings for this food within the last 6 months
+      const recent = (servings || []).filter(
+        s => s.foodId === foodId && s.date >= cutoff
+      );
+
+      // No data = no score
       if (recent.length === 0) return { score: null, ratingId: null, rating: null };
+
+      // Map each serving to its point value and compute the average
       const pointMap = { none: 0, some: 5, all: 10 };
       const total = recent.reduce((sum, s) => sum + (pointMap[s.eaten] ?? 0), 0);
       const score = total / recent.length;
+
+      // Find which rating tier the score falls into (loves > likes > meh > dislikes)
       const r = RATINGS.find(rt => score >= rt.min);
       return { score, ratingId: r?.id || null, rating: r || null };
     };
 
-    // --- REDUCER ---
+    // Get the last N servings for a food, sorted most-recent-first
+    const getRecentServings = (foodId, servings, count = 5) => {
+      return (servings || [])
+        .filter(s => s.foodId === foodId)
+        .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id))
+        .slice(0, count);
+    };
+
+    // Filter servings to only those belonging to a specific child
+    const childServings = (servings, childId) => (servings || []).filter(s => s.childId === childId);
+
+    // Filter plans to only those belonging to a specific child
+    const childPlans = (plans, childId) => (plans || []).filter(p => p.childId === childId);
+
+    // --- Reducer ---
     const appReducer = (state, action) => {
       switch (action.type) {
         case 'HYDRATE': return { ...state, ...action.payload, isLoaded: true };
-        case 'SYNC_REMOTE': return { ...state, [action.key]: action.data };
-        
+
         case 'ADD_FOOD': {
-          const food = { id: generateId(), name: action.name.trim(), categories: action.categories || [], stock: action.stock || 'in', notes: action.notes || '', source: action.source || 'home', createdAt: getTodayStr() };
-          return { ...state, foods: [...state.foods, food], lastChanged: { type: 'foods', id: food.id } };
+          const name = action.name.trim();
+          const mem = state.foodMemory?.[name.toLowerCase()] || {};
+          // Food objects no longer carry a .rating field — preferences are computed from servings
+          const food = {
+            id: generateId(), name,
+            categories: action.categories || mem.categories || [],
+            stock: action.stock || 'in',
+            notes: action.notes || mem.notes || '',
+            source: action.source || 'home',
+            createdAt: getTodayStr()
+          };
+          return { ...state, foods: [...state.foods, food] };
         }
+
+        case 'BATCH_ADD': {
+          let updatedFoods = [...state.foods];
+          action.names.forEach(n => {
+            const clean = n.trim();
+            if (!clean || updatedFoods.some(f => f.name.toLowerCase() === clean.toLowerCase())) return;
+            const mem = state.foodMemory?.[clean.toLowerCase()] || {};
+            updatedFoods.push({
+              id: generateId(), name: clean,
+              categories: mem.categories || [],
+              stock: 'in', notes: mem.notes || '',
+              source: 'home', createdAt: getTodayStr()
+            });
+          });
+          return { ...state, foods: updatedFoods };
+        }
+
         case 'UPDATE_FOOD': {
           const foods = state.foods.map(f => f.id === action.id ? { ...f, ...action.updates } : f);
-          return { ...state, foods, lastChanged: { type: 'foods', id: action.id } };
+          const food = foods.find(f => f.id === action.id);
+          if (!food) return state;
+          // foodMemory stores categories and notes (no longer rating)
+          const memory = { ...state.foodMemory, [food.name.toLowerCase()]: { categories: food.categories, notes: food.notes } };
+          return { ...state, foods, foodMemory: memory };
         }
+
+        case 'BULK_UPDATE': {
+          const updatedFoods = state.foods.map(f => action.ids.includes(f.id) ? { ...f, ...action.updates } : f);
+          return { ...state, foods: updatedFoods };
+        }
+
+        case 'DELETE_FOODS': return { ...state, foods: state.foods.filter(f => !action.ids.includes(f.id)) };
+
+        // TOGGLE_FOOD_IN_MEAL now requires a childId.
+        // When sameMealDefault is on, the UI dispatches this once per child.
+        case 'TOGGLE_FOOD_IN_MEAL': {
+          const cid = action.childId;
+          const plan = state.plans.find(p => p.date === action.date && p.meal === action.meal && p.childId === cid);
+          if (!plan?.foodIds.includes(action.foodId)) {
+            if (plan) return { ...state, plans: state.plans.map(p => p.id === plan.id ? { ...p, foodIds: [...p.foodIds, action.foodId] } : p) };
+            return { ...state, plans: [...state.plans, { id: generateId(), date: action.date, meal: action.meal, childId: cid, foodIds: [action.foodId] }] };
+          }
+          return { ...state, plans: state.plans.map(p => (p.date === action.date && p.meal === action.meal && p.childId === cid) ? { ...p, foodIds: p.foodIds.filter(id => id !== action.foodId) } : p).filter(p => p.foodIds.length > 0) };
+        }
+
+        // Restaurant discovery: creates the food AND logs an initial serving.
+        // Now creates plan+serving for active child (or all children if sameMealDefault).
+        case 'DISCOVER_FOOD': {
+          const name = action.name.trim();
+          const foodId = generateId();
+          const newFood = { id: foodId, name, categories: [], stock: 'out', notes: '', source: 'outside', createdAt: getTodayStr() };
+          // Determine which children get this discovery
+          const targetChildren = action.childIds || [action.childId || state.children?.[0]?.id];
+          let newPlans = [...state.plans];
+          let newServings = [...state.servings];
+          targetChildren.forEach(cid => {
+            // Add to today's dinner plan for each target child
+            const plan = newPlans.find(p => p.date === getTodayStr() && p.meal === 'dinner' && p.childId === cid);
+            if (plan) {
+              newPlans = newPlans.map(p => p.id === plan.id ? { ...p, foodIds: [...p.foodIds, foodId] } : p);
+            } else {
+              newPlans.push({ id: generateId(), date: getTodayStr(), meal: 'dinner', childId: cid, foodIds: [foodId] });
+            }
+            // Log the initial eating event if an eaten value was provided
+            if (action.eaten) {
+              newServings.push({ id: generateId(), foodId, date: getTodayStr(), meal: 'dinner', childId: cid, eaten: action.eaten });
+            }
+          });
+          return { ...state, foods: [...state.foods, newFood], plans: newPlans, servings: newServings };
+        }
+
+        case 'SAVE_COMBO': return { ...state, combos: [...state.combos, { id: generateId(), name: action.name, foodIds: action.foodIds }] };
+
+        // APPLY_COMBO: applies a combo meal for a specific child (or all children if sameMealDefault)
+        case 'APPLY_COMBO': {
+          let s = state;
+          const targetChildren = action.childIds || [action.childId];
+          targetChildren.forEach(cid => {
+            action.foodIds.forEach(fid => {
+              s = appReducer(s, { type: 'TOGGLE_FOOD_IN_MEAL', date: action.date, meal: action.meal, childId: cid, foodId: fid });
+            });
+          });
+          return s;
+        }
+
+        case 'DISMISS_SHOPPING': return { ...state, shoppingDismissed: [...(state.shoppingDismissed || []), action.id] };
+        case 'DELETE_FOOD': return { ...state, foods: state.foods.filter(f => f.id !== action.id) };
+
+        // Merge multiple foods into one. Keeps the primary food (action.keepId),
+        // reassigns servings and plan references from the others, merges categories,
+        // then deletes the merged-away foods.
+        case 'MERGE_FOODS': {
+          const keepId = action.keepId;
+          const mergeIds = action.allIds.filter(id => id !== keepId);
+          const keepFood = state.foods.find(f => f.id === keepId);
+          if (!keepFood) return state;
+
+          // Collect all unique categories from all merged foods
+          const allCats = new Set(keepFood.categories || []);
+          mergeIds.forEach(id => {
+            const f = state.foods.find(x => x.id === id);
+            f?.categories?.forEach(c => allCats.add(c));
+          });
+
+          // Update the surviving food with the merged name and categories
+          const updatedFoods = state.foods
+            .filter(f => !mergeIds.includes(f.id))
+            .map(f => f.id === keepId
+              ? { ...f, name: action.name || f.name, categories: [...allCats] }
+              : f
+            );
+
+          // Reassign servings from merged foods to the survivor
+          const updatedServings = state.servings.map(s =>
+            mergeIds.includes(s.foodId) ? { ...s, foodId: keepId } : s
+          );
+
+          // Reassign food references in meal plans
+          const updatedPlans = state.plans.map(p => {
+            const newFoodIds = p.foodIds.map(id => mergeIds.includes(id) ? keepId : id);
+            // Deduplicate in case both the kept and a merged food were in the same meal
+            return { ...p, foodIds: [...new Set(newFoodIds)] };
+          });
+
+          // Reassign combo references too
+          const updatedCombos = (state.combos || []).map(c => {
+            const newFoodIds = c.foodIds.map(id => mergeIds.includes(id) ? keepId : id);
+            return { ...c, foodIds: [...new Set(newFoodIds)] };
+          });
+
+          return { ...state, foods: updatedFoods, servings: updatedServings, plans: updatedPlans, combos: updatedCombos };
+        }
+
+        // Log a single serving — now requires childId
+        case 'LOG_SERVING': {
+          return { ...state, servings: [...state.servings, { id: generateId(), foodId: action.foodId, date: action.date, meal: action.meal, childId: action.childId, eaten: action.eaten }] };
+        }
+
+        // Log a batch of servings at once (from the meal check-in flow)
+        // action.entries is an array of { foodId, date, meal, childId, eaten }
         case 'LOG_SERVINGS_BATCH': {
           const newServings = action.entries.map(e => ({ id: generateId(), ...e }));
-          return { ...state, servings: [...state.servings, ...newServings], lastChanged: { type: 'servings', batch: newServings } };
+          return { ...state, servings: [...state.servings, ...newServings] };
         }
-        case 'TOGGLE_FOOD_IN_MEAL': {
-          const { date, meal, childId, foodId } = action;
-          const plan = state.plans.find(p => p.date === date && p.meal === meal && p.childId === childId);
-          let newPlans;
-          let targetId;
-          if (!plan?.foodIds.includes(foodId)) {
-            if (plan) {
-              targetId = plan.id;
-              newPlans = state.plans.map(p => p.id === plan.id ? { ...p, foodIds: [...p.foodIds, foodId] } : p);
-            } else {
-              const newPlan = { id: generateId(), date, meal, childId, foodIds: [foodId] };
-              targetId = newPlan.id;
-              newPlans = [...state.plans, newPlan];
-            }
-          } else {
-            targetId = plan.id;
-            newPlans = state.plans.map(p => p.id === plan.id ? { ...p, foodIds: p.foodIds.filter(id => id !== foodId) } : p).filter(p => p.foodIds.length > 0);
-          }
-          return { ...state, plans: newPlans, lastChanged: { type: 'plans', id: targetId } };
+
+        // --- Child management actions ---
+        case 'ADD_CHILD': {
+          const child = {
+            id: generateId(),
+            name: action.name.trim(),
+            emoji: action.emoji || CHILD_EMOJIS[state.children.length % CHILD_EMOJIS.length],
+            order: state.children.length,
+            createdAt: getTodayStr()
+          };
+          return { ...state, children: [...state.children, child] };
         }
-        // ... (Other actions remain essentially the same, just flagging state.lastChanged)
-        case 'UPDATE_SETTINGS': return { ...state, settings: { ...state.settings, ...action.updates }, lastChanged: { type: 'settings' } };
+
+        case 'UPDATE_CHILD': {
+          const children = state.children.map(c => c.id === action.id ? { ...c, ...action.updates } : c);
+          return { ...state, children };
+        }
+
+        // Remove a child and all their associated meal plans and servings
+        case 'REMOVE_CHILD': {
+          return {
+            ...state,
+            children: state.children.filter(c => c.id !== action.id),
+            plans: state.plans.filter(p => p.childId !== action.id),
+            servings: state.servings.filter(s => s.childId !== action.id),
+          };
+        }
+
+        // Update app-level settings (sameMealDefault, activeChildId, etc.)
+        case 'UPDATE_SETTINGS': {
+          return { ...state, settings: { ...state.settings, ...action.updates } };
+        }
+
+        // Import replaces all data stores from an uploaded JSON backup
+        // v4 format includes children and settings; v3 and earlier get migrated on load
+        case 'IMPORT_DATA': return {
+          ...state,
+          foods: action.payload.foods || [],
+          plans: action.payload.plans || [],
+          combos: action.payload.combos || [],
+          foodMemory: action.payload.foodMemory || {},
+          shoppingDismissed: action.payload.shoppingDismissed || [],
+          servings: action.payload.servings || [],
+          children: action.payload.children || state.children,
+          settings: action.payload.settings || state.settings,
+        };
+
         default: return state;
       }
     };
 
-    // --- MAIN COMPONENT ---
-    function App() {
-      const [state, dispatch] = useReducer(appReducer, {
-        isLoaded: false, foods: [], plans: [], servings: [], children: [],
-        settings: { sameMealDefault: true, activeChildId: null },
-        familyCode: localStorage.getItem('familyCode') || null,
-        lastChanged: null
-      });
-
-      const [showGateway, setShowGateway] = useState(!localStorage.getItem('familyCode'));
-      const firebaseRef = useRef({ db: null, auth: null });
-
-      // 1. Initialize Firebase & Auth
-      useEffect(() => {
-        if (!window.FirebaseLib) return;
-        const { initializeApp, getFirestore, getAuth, signInAnonymously } = window.FirebaseLib;
-        const app = initializeApp(firebaseConfig);
-        firebaseRef.current.db = getFirestore(app);
-        firebaseRef.current.auth = getAuth(app);
-        signInAnonymously(firebaseRef.current.auth);
-      }, []);
-
-      // 2. Real-time Listeners
-      useEffect(() => {
-        if (!state.familyCode || !firebaseRef.current.db) return;
-        const { db } = firebaseRef.current;
-        const { collection, onSnapshot, query, doc } = window.FirebaseLib;
-
-        const syncCollection = (name, stateKey) => {
-          return onSnapshot(collection(db, `families/${state.familyCode}/${name}`), (snap) => {
-            const data = snap.docs.map(d => d.data());
-            // Only update if remote data is different to avoid loops
-            dispatch({ type: 'SYNC_REMOTE', key: stateKey, data });
-          });
-        };
-
-        // Sync main collections
-        const unsubFoods = syncCollection('foods', 'foods');
-        const unsubPlans = syncCollection('plans', 'plans');
-        const unsubServings = syncCollection('servings', 'servings');
-        const unsubChildren = syncCollection('children', 'children');
-
-        // Sync settings (single doc)
-        const unsubSettings = onSnapshot(doc(db, `families/${state.familyCode}/config/settings`), (doc) => {
-          if (doc.exists()) dispatch({ type: 'SYNC_REMOTE', key: 'settings', data: doc.data() });
+    // --- Migration: convert old manual ratings to synthetic serving records ---
+    // Called once after HYDRATE if foods still have .rating fields
+    const migrateRatingsToServings = (foods, existingServings, defaultChildId) => {
+      const newServings = [];
+      const updatedFoods = foods.map(f => {
+        if (!f.rating) return f;
+        // Map old rating to an eaten value
+        const eatenMap = { loves: 'all', likes: 'some', neutral: 'some', dislikes: 'none' };
+        const eaten = eatenMap[f.rating] || 'some';
+        // Create a synthetic serving dated to when the food was created
+        newServings.push({
+          id: generateId(),
+          foodId: f.id,
+          date: f.createdAt || getTodayStr(),
+          meal: 'lunch', // arbitrary — just need a data point
+          childId: defaultChildId,
+          eaten,
         });
+        // Strip the old rating field from the food
+        const { rating, ...cleanFood } = f;
+        return cleanFood;
+      });
+      return { foods: updatedFoods, servings: [...existingServings, ...newServings] };
+    };
 
-        return () => { unsubFoods(); unsubPlans(); unsubServings(); unsubChildren(); unsubSettings(); };
-      }, [state.familyCode]);
+    // --- Migration: backfill childId onto plans and servings for existing single-child users ---
+    // Creates a default child if none exist, then stamps childId onto every record missing one.
+    const migrateToMultiChild = (data) => {
+      let { children, settings, plans, servings } = data;
 
-      // 3. Persistence Effect (Push to Firebase)
-      useEffect(() => {
-        if (!state.lastChanged || !state.familyCode || !firebaseRef.current.db) return;
-        const { db } = firebaseRef.current;
-        const { doc, setDoc, writeBatch } = window.FirebaseLib;
-        const { type, id, batch } = state.lastChanged;
+      // If children already exist, no migration needed
+      if (children && children.length > 0) return data;
 
-        const pushData = async () => {
-          if (type === 'settings') {
-            await setDoc(doc(db, `families/${state.familyCode}/config/settings`), state.settings);
-          } else if (batch) {
-            const b = writeBatch(db);
-            batch.forEach(item => b.set(doc(db, `families/${state.familyCode}/${type}/${item.id}`), item));
-            await b.commit();
-          } else if (id) {
-            const item = state[type].find(x => x.id === id);
-            if (item) {
-              await setDoc(doc(db, `families/${state.familyCode}/${type}/${id}`), item);
-            }
-          }
-        };
-        pushData();
-      }, [state.lastChanged]);
-
-      const handleJoinFamily = async (code) => {
-        const cleanCode = code.toUpperCase().trim();
-        localStorage.setItem('familyCode', cleanCode);
-        dispatch({ type: 'HYDRATE', payload: { familyCode: cleanCode } });
-        setShowGateway(false);
+      // Create a default child for existing users
+      const defaultChild = {
+        id: 'default',
+        name: 'My Child',
+        emoji: '🦊',
+        order: 0,
+        createdAt: getTodayStr()
       };
+      children = [defaultChild];
+      settings = { ...(settings || {}), sameMealDefault: true, activeChildId: 'default' };
 
-      const handleCreateFamily = async () => {
-        const newCode = generateFamilyCode();
-        // Option to "Upload existing data" here
-        handleJoinFamily(newCode);
-      };
+      // Backfill childId on all plans and servings that don't have one
+      plans = (plans || []).map(p => p.childId ? p : { ...p, childId: 'default' });
+      servings = (servings || []).map(s => s.childId ? s : { ...s, childId: 'default' });
 
-      if (showGateway) return (
-        <div className="min-h-screen flex items-center justify-center p-6 bg-brand-50">
-          <div className="bg-white p-8 rounded-[2.5rem] shadow-xl w-full max-w-sm text-center">
-            <i className="ph-fill ph-house-line text-6xl text-brand-500 mb-4"></i>
-            <h1 className="text-2xl font-black text-brand-900 mb-2">Sync with Partner</h1>
-            <p className="text-sm text-neutral font-bold mb-8 leading-relaxed">Create a family code to share your meal data across multiple phones.</p>
-            
-            <button onClick={handleCreateFamily} className="w-full bg-brand-500 text-white py-4 rounded-2xl font-black uppercase shadow-lg mb-4 active:scale-95 transition-all">Start New Family</button>
-            
-            <div className="relative flex items-center py-4">
-              <div className="flex-grow border-t border-slate-100"></div>
-              <span className="flex-shrink mx-4 text-[10px] font-black text-slate-300 uppercase">Or Join</span>
-              <div className="flex-grow border-t border-slate-100"></div>
-            </div>
+      return { ...data, children, settings, plans, servings };
+    };
 
-            <JoinInput onJoin={handleJoinFamily} />
-          </div>
+    // --- UI Helpers ---
+    const Modal = ({ children, onClose }) => (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-brand-900/60 p-4 animate-in" onClick={(e) => e.target === e.currentTarget && onClose()}>
+        <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-md max-h-[85vh] overflow-y-auto">{children}</div>
+      </div>
+    );
+
+    // RatingIcon: renders a preference icon based on computed score from servings.
+    // Pass foodId + servings for computed mode, or ratingId for direct mode.
+    const RatingIcon = ({ foodId, servings, ratingId, size = "sm" }) => {
+      // If a direct ratingId is given, use it; otherwise compute from servings
+      const id = ratingId || (foodId ? getPreferenceScore(foodId, servings).ratingId : null);
+      const r = RATINGS.find(rt => rt.id === id);
+      return r ? <i className={`${r.icon} ${r.color} ${size === 'lg' ? 'text-3xl' : 'text-xl'}`}></i> : null;
+    };
+
+    // Per-child preference badges — shows each child's preference icon for a food
+    const ChildPreferenceBadges = ({ foodId, children, servings }) => {
+      if (!children || children.length < 2) return null;
+      return (
+        <div className="flex gap-1 items-center">
+          {children.map(child => {
+            const cServings = childServings(servings, child.id);
+            const { ratingId } = getPreferenceScore(foodId, cServings);
+            const r = RATINGS.find(rt => rt.id === ratingId);
+            if (!r) return null;
+            return (
+              <span key={child.id} className="flex items-center gap-0.5" title={`${child.name}: ${r.label}`}>
+                <span className="text-[10px]">{child.emoji}</span>
+                <i className={`${r.icon} ${r.color} text-xs`}></i>
+              </span>
+            );
+          })}
         </div>
       );
+    };
 
-      // (Rest of the UI: TodayView, ListView, etc. - same as original)
+    const calculateExposures = (foodId, plans) => plans.filter(p => p.date <= getTodayStr() && p.foodIds.includes(foodId)).length;
+
+    // Child selector bar — shown when 2+ children exist.
+    // Renders horizontal pills for switching the active child.
+    const ChildSelector = ({ children, activeChildId, onSelect, settings, dispatch }) => {
+      if (!children || children.length < 2) return null;
       return (
-        <div className="min-h-screen flex flex-col pt-8">
-          <div className="max-w-md mx-auto w-full px-6 flex justify-between items-center opacity-50">
-            <span className="text-[10px] font-black uppercase tracking-widest text-brand-900">
-              <i className="ph ph-users-three mr-1"></i> Family: {state.familyCode}
-            </span>
-            <button onClick={() => { localStorage.removeItem('familyCode'); location.reload(); }} className="text-[8px] font-black uppercase">Leave</button>
+        <div className="flex gap-2 items-center overflow-x-auto no-scrollbar pb-2 px-1">
+          {children.sort((a, b) => a.order - b.order).map(child => (
+            <button key={child.id} onClick={() => onSelect(child.id)}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-2xl text-sm font-black transition-all whitespace-nowrap active:scale-95 ${
+                activeChildId === child.id
+                  ? 'bg-brand-500 text-white shadow-lg'
+                  : 'bg-white text-brand-900 border border-slate-200'
+              }`}>
+              <span className="text-base">{child.emoji}</span>
+              <span>{child.name}</span>
+            </button>
+          ))}
+        </div>
+      );
+    };
+
+    // ==========================================================================
+    // MAIN VIEWS
+    // ==========================================================================
+
+    // TutorialModal: Walks new users through what the app does and how to use it.
+    // Shown via the "?" button on the home screen or on first launch.
+    function TutorialModal({ onClose }) {
+      const [step, setStep] = useState(0);
+      const steps = [
+        {
+          icon: 'ph-fill ph-package',
+          title: 'Build Your Pantry',
+          body: 'Start by adding the foods your family eats. Categorize them as carb, protein, fruit, veggie, or snack — this helps track meal balance.',
+          color: 'text-brand-500',
+        },
+        {
+          icon: 'ph-fill ph-calendar-blank',
+          title: 'Plan Meals',
+          body: 'Use the Planner tab to add foods to breakfast, lunch, dinner, and snacks. Save time with Combos — reusable meal templates.',
+          color: 'text-brand-500',
+        },
+        {
+          icon: 'ph-fill ph-check-circle',
+          title: 'Check In After Meals',
+          body: 'After each meal, tap "How was lunch?" to log how much was eaten: None, Some, or All. This builds preference data over time.',
+          color: 'text-brand-500',
+        },
+        {
+          icon: 'ph-fill ph-chart-line-up',
+          title: 'Track Exposure',
+          body: 'Research shows it takes ~15 exposures for a child to accept a new food. The app tracks this automatically — keep serving, even if they say no!',
+          color: 'text-accent',
+        },
+        {
+          icon: 'ph-fill ph-heart',
+          title: 'Watch Preferences Emerge',
+          body: 'Preferences are computed from eating history, not guesswork. Over time you\'ll see which foods are Loved, Liked, Meh, or Disliked — and watch them change.',
+          color: 'text-accent',
+        },
+        {
+          icon: 'ph-fill ph-users-three',
+          title: 'Multiple Kids? No Problem',
+          body: 'Add children in the Family tab. Plan the same meal for everyone, then make per-kid tweaks. Each child gets their own preference profile.',
+          color: 'text-brand-900',
+        },
+      ];
+      const s = steps[step];
+      const isLast = step === steps.length - 1;
+
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-8 text-center">
+            {/* Progress dots */}
+            <div className="flex justify-center gap-2 mb-8">
+              {steps.map((_, i) => (
+                <div key={i} className={`h-1.5 rounded-full transition-all ${i === step ? 'w-8 bg-brand-500' : 'w-1.5 bg-slate-200'}`} />
+              ))}
+            </div>
+
+            <i className={`${s.icon} ${s.color} text-6xl mb-4`}></i>
+            <h2 className="text-2xl font-black text-brand-900 mb-3">{s.title}</h2>
+            <p className="text-sm text-neutral font-bold leading-relaxed mb-8">{s.body}</p>
+
+            <div className="flex gap-3">
+              {step > 0 && (
+                <button onClick={() => setStep(step - 1)}
+                  className="flex-1 py-4 border-2 border-slate-200 rounded-2xl font-black uppercase text-[10px] text-neutral active:scale-95">
+                  Back
+                </button>
+              )}
+              <button onClick={() => isLast ? onClose() : setStep(step + 1)}
+                className="flex-[2] py-4 bg-brand-500 text-white rounded-2xl font-black uppercase shadow-lg active:scale-95">
+                {isLast ? 'Get Started' : 'Next'}
+              </button>
+            </div>
+            {!isLast && (
+              <button onClick={onClose} className="w-full mt-3 py-2 text-neutral text-[10px] font-black uppercase">Skip</button>
+            )}
           </div>
-          {/* Render your original components here... */}
-          <p className="p-10 text-center font-bold text-neutral">App UI Content Goes Here</p>
+        </Modal>
+      );
+    }
+
+    function TodayView({ foods, plans, servings, state, dispatch, setQuickSort, activeChildId, children: kids }) {
+      const [checkInMeal, setCheckInMeal] = useState(null);
+      const [restaurantMode, setRestaurantMode] = useState(false);
+      const [showData, setShowData] = useState(false);
+      const [showTutorial, setShowTutorial] = useState(false);
+      const tStr = getTodayStr();
+
+      // Filter plans and servings by active child
+      const myPlans = childPlans(plans, activeChildId);
+      const myServings = childServings(servings, activeChildId);
+
+      // Find meals that have planned foods but no servings logged yet today.
+      const uncheckedMeals = useMemo(() => {
+        return MEALS.filter(meal => {
+          const plan = myPlans.find(p => p.date === tStr && p.meal === meal);
+          if (!plan || plan.foodIds.length === 0) return false;
+          const hasServings = plan.foodIds.some(fid =>
+            myServings.some(s => s.foodId === fid && s.date === tStr && s.meal === meal)
+          );
+          return !hasServings;
+        });
+      }, [myPlans, myServings, tStr]);
+
+      const activeChild = kids.find(c => c.id === activeChildId);
+
+      // For multi-child check-in: find which children need checking in for a meal
+      const getUncheckedChildren = (meal) => {
+        return (kids || []).filter(child => {
+          const cPlans = childPlans(plans, child.id);
+          const cServings = childServings(servings, child.id);
+          const plan = cPlans.find(p => p.date === tStr && p.meal === meal);
+          if (!plan || plan.foodIds.length === 0) return false;
+          const hasServings = plan.foodIds.some(fid =>
+            cServings.some(s => s.foodId === fid && s.date === tStr && s.meal === meal)
+          );
+          return !hasServings;
+        });
+      };
+
+      // --- Exposure-focused stats ---
+      // Foods approaching acceptance: 10-14 exposures (almost at the 15-try threshold)
+      const approachingAcceptance = useMemo(() => {
+        return foods
+          .filter(f => {
+            const exp = calculateExposures(f.id, myPlans);
+            return exp >= 10 && exp < 15;
+          })
+          .map(f => ({ ...f, exposures: calculateExposures(f.id, myPlans) }))
+          .sort((a, b) => b.exposures - a.exposures)
+          .slice(0, 4); // Show top 4 closest to acceptance
+      }, [foods, myPlans]);
+
+      // Total accepted foods count (15+ exposures)
+      const acceptedCount = useMemo(() => {
+        return foods.filter(f => calculateExposures(f.id, myPlans) >= 15).length;
+      }, [foods, myPlans]);
+
+      // --- Shopping urgency ---
+      // Foods that are out/low and are favorites (loved or liked)
+      const shoppingUrgent = useMemo(() => {
+        const needsShopping = foods.filter(f =>
+          f.stock !== 'in' && f.source !== 'outside' && !(state.shoppingDismissed || []).includes(f.id)
+        );
+        const favorites = needsShopping.filter(f => {
+          const { ratingId } = getPreferenceScore(f.id, myServings);
+          return ratingId === 'loves' || ratingId === 'likes';
+        });
+        const total = needsShopping.length;
+        return { favorites, total };
+      }, [foods, myServings, state.shoppingDismissed]);
+
+      // --- Unplanned meals tomorrow ---
+      const tomorrowStr = useMemo(() => {
+        const d = new Date(); d.setDate(d.getDate() + 1);
+        return d.toLocaleDateString('en-CA');
+      }, []);
+      const unplannedTomorrow = useMemo(() => {
+        return ['breakfast', 'lunch', 'dinner'].filter(meal => {
+          const plan = myPlans.find(p => p.date === tomorrowStr && p.meal === meal);
+          return !plan || plan.foodIds.length === 0;
+        });
+      }, [myPlans, tomorrowStr]);
+
+      return (
+        <div className="animate-in pb-24">
+          {/* Header bar with action buttons */}
+          <div className="flex justify-between items-center mb-5">
+            <h2 className="text-3xl font-black text-brand-900 tracking-tight">
+              {kids.length > 1 ? `${activeChild?.emoji || ''} Today` : 'Today'}
+            </h2>
+            <div className="flex gap-2">
+              <button onClick={() => setShowTutorial(true)} className="w-10 h-10 bg-white border border-slate-200 rounded-full flex items-center justify-center active:scale-90">
+                <i className="ph-bold ph-question text-brand-500"></i>
+              </button>
+              <button onClick={() => setShowData(true)} className="w-10 h-10 bg-white border border-slate-200 rounded-full flex items-center justify-center active:scale-90">
+                <i className="ph ph-gear text-neutral"></i>
+              </button>
+              <button onClick={() => setQuickSort(true)} className="w-10 h-10 bg-brand-500 rounded-full flex items-center justify-center shadow-lg active:scale-90">
+                <i className="ph-fill ph-lightning text-white"></i>
+              </button>
+            </div>
+          </div>
+
+          {/* ---- SECTION 1: Meal check-ins (most time-sensitive) ---- */}
+          {uncheckedMeals.length > 0 && (
+            <div className="space-y-3 mb-6">
+              {uncheckedMeals.map(meal => {
+                const uncheckedKids = getUncheckedChildren(meal);
+                return (
+                  <button key={meal} onClick={() => setCheckInMeal(meal)}
+                    className="w-full bg-brand-900 text-white p-6 rounded-[2.5rem] shadow-xl flex items-center justify-between active:scale-95 transition-all">
+                    <div className="text-left">
+                      <p className="text-xl font-black text-white capitalize">How was {meal}?</p>
+                      <p className="text-xs opacity-60 font-bold uppercase tracking-widest mt-1">
+                        {kids.length > 1 && uncheckedKids.length > 0
+                          ? `${uncheckedKids.map(c => c.emoji).join(' ')} needs logging`
+                          : 'Log what was eaten'}
+                      </p>
+                    </div>
+                    <i className="ph ph-arrow-circle-right text-white text-2xl"></i>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ---- SECTION 2: Planning nudge (tomorrow's gaps) ---- */}
+          {unplannedTomorrow.length > 0 && (
+            <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-amber-100 mb-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-amber-50 rounded-full flex items-center justify-center">
+                  <i className="ph-fill ph-calendar-blank text-amber-500 text-xl"></i>
+                </div>
+                <div>
+                  <p className="font-black text-brand-900 text-sm">Tomorrow needs planning</p>
+                  <p className="text-[10px] font-bold text-neutral uppercase">
+                    {unplannedTomorrow.map(m => m.charAt(0).toUpperCase() + m.slice(1)).join(', ')} empty
+                  </p>
+                </div>
+              </div>
+              <i className="ph ph-caret-right text-neutral"></i>
+            </div>
+          )}
+
+          {/* ---- SECTION 3: Exposure progress (the real value of the app) ---- */}
+          {approachingAcceptance.length > 0 && (
+            <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 mb-4">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <p className="font-black text-brand-900 text-sm">Almost Accepted</p>
+                  <p className="text-[10px] font-bold text-neutral uppercase">Close to 15 exposures</p>
+                </div>
+                <div className="w-10 h-10 bg-brand-50 rounded-full flex items-center justify-center">
+                  <i className="ph-fill ph-trend-up text-brand-500 text-xl"></i>
+                </div>
+              </div>
+              <div className="space-y-3">
+                {approachingAcceptance.map(f => (
+                  <div key={f.id}>
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-sm font-bold">{f.name}</span>
+                      <span className="text-[10px] font-black text-brand-500">{f.exposures}/15</span>
+                    </div>
+                    <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-brand-500 rounded-full transition-all"
+                        style={{ width: `${(f.exposures / 15) * 100}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ---- SECTION 4: Stat cards row ---- */}
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            {/* Accepted foods count */}
+            <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100">
+              <div className="flex items-center gap-2 mb-1">
+                <i className="ph-fill ph-seal-check text-brand-500 text-lg"></i>
+                <p className="text-[10px] font-bold text-neutral uppercase tracking-tighter">Accepted</p>
+              </div>
+              <p className="text-3xl font-black text-brand-500">{acceptedCount}</p>
+              <p className="text-[10px] text-neutral font-bold opacity-50">15+ exposures</p>
+            </div>
+            {/* Shopping urgency */}
+            <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100">
+              <div className="flex items-center gap-2 mb-1">
+                <i className="ph-fill ph-shopping-cart text-accent text-lg"></i>
+                <p className="text-[10px] font-bold text-neutral uppercase tracking-tighter">To Buy</p>
+              </div>
+              <p className="text-3xl font-black text-accent">{shoppingUrgent.total}</p>
+              {shoppingUrgent.favorites.length > 0 && (
+                <p className="text-[10px] text-accent font-bold">{shoppingUrgent.favorites.length} favorite{shoppingUrgent.favorites.length !== 1 ? 's' : ''} running low</p>
+              )}
+              {shoppingUrgent.favorites.length === 0 && (
+                <p className="text-[10px] text-neutral font-bold opacity-50">items needed</p>
+              )}
+            </div>
+          </div>
+
+          {/* ---- SECTION 5: Quick actions ---- */}
+          <div className="space-y-3">
+            <button onClick={() => setRestaurantMode(true)} className="w-full bg-white border border-brand-100 p-5 rounded-[2rem] shadow-sm flex items-center justify-between active:scale-95 transition-all">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-brand-50 rounded-full flex items-center justify-center">
+                  <i className="ph-fill ph-fork-knife text-brand-500 text-xl"></i>
+                </div>
+                <div className="text-left">
+                  <p className="font-black text-brand-900">Dining Out?</p>
+                  <p className="text-[10px] text-neutral font-bold opacity-60">Log a restaurant discovery</p>
+                </div>
+              </div>
+              <i className="ph ph-plus-circle text-brand-500 text-xl"></i>
+            </button>
+          </div>
+
+          {/* Modals */}
+          {restaurantMode && <DiscoveryModal dispatch={dispatch} onClose={() => setRestaurantMode(false)} activeChildId={activeChildId} children={kids} settings={state.settings} />}
+          {checkInMeal && <MealCheckInModal meal={checkInMeal} plans={plans} foods={foods} servings={servings} dispatch={dispatch} onClose={() => setCheckInMeal(null)} activeChildId={activeChildId} children={kids} settings={state.settings} />}
+          {showData && <DataModal state={state} dispatch={dispatch} onClose={() => setShowData(false)} />}
+          {showTutorial && <TutorialModal onClose={() => setShowTutorial(false)} />}
         </div>
       );
     }
 
-    const JoinInput = ({ onJoin }) => {
-      const [val, setVal] = useState('');
+    function MealPlannerView({ foods, plans, combos, servings, dispatch, activeChildId, children: kids, settings }) {
+      const [viewMode, setViewMode] = useState('daily');
+      const [date, setDate] = useState(getTodayStr());
+      const [picker, setPicker] = useState(null);
+      const shift = (o) => { let d = new Date(date + 'T00:00:00'); d.setDate(d.getDate() + o); setDate(d.toLocaleDateString('en-CA')); };
+      const weekDates = Array.from({length: 7}, (_, i) => { const d = new Date(date + 'T00:00:00'); const day = d.getDay(); const diff = d.getDate() - day + (day === 0 ? -6 : 1) + i; d.setDate(diff); return d.toLocaleDateString('en-CA'); });
+
+      // Filter plans by active child
+      const myPlans = childPlans(plans, activeChildId);
+      const myServings = childServings(servings, activeChildId);
+
+      // When sameMealDefault is on, check if other children have different meals
+      const getChildDiffs = (date, meal) => {
+        if (!kids || kids.length < 2) return null;
+        const basePlan = myPlans.find(p => p.date === date && p.meal === meal);
+        const baseFoodIds = new Set(basePlan?.foodIds || []);
+        return kids.filter(c => c.id !== activeChildId).map(child => {
+          const cPlan = plans.find(p => p.date === date && p.meal === meal && p.childId === child.id);
+          const cFoodIds = new Set(cPlan?.foodIds || []);
+          // Find differences
+          const removed = [...baseFoodIds].filter(id => !cFoodIds.has(id));
+          const added = [...cFoodIds].filter(id => !baseFoodIds.has(id));
+          const same = removed.length === 0 && added.length === 0 && baseFoodIds.size === cFoodIds.size;
+          return { child, removed, added, same };
+        });
+      };
+
       return (
-        <div className="flex gap-2">
-          <input type="text" value={val} onChange={e => setVal(e.target.value)} placeholder="Enter Code" className="flex-1 bg-slate-50 border-none rounded-xl px-4 font-black text-center uppercase tracking-widest outline-none" />
-          <button onClick={() => val.length === 6 && onJoin(val)} className="bg-brand-900 text-white px-4 py-3 rounded-xl font-black uppercase text-xs active:scale-95 transition-all">Join</button>
+        <div className="animate-in pb-24 px-1">
+          <div className="bg-white p-4 rounded-3xl border border-slate-100 mb-4 sticky top-0 z-30 shadow-sm"><div className="flex justify-between items-center mb-4"><button onClick={() => shift(-1)} className="w-10 h-10 bg-brand-50 text-brand-500 rounded-full font-black flex items-center justify-center active:scale-90"><i className="ph ph-caret-left"></i></button><div className="text-center font-black"><p className="text-lg text-brand-900">{date === getTodayStr() ? 'Today' : date.split('-').slice(1).join('/')}</p><p className="text-[8px] uppercase tracking-[0.3em] text-neutral">{new Date(date+'T00:00:00').toLocaleDateString('en-US',{weekday:'long'})}</p></div><button onClick={() => shift(1)} className="w-10 h-10 bg-brand-50 text-brand-500 rounded-full font-black flex items-center justify-center active:scale-90"><i className="ph ph-caret-right"></i></button></div><div className="flex gap-2 p-1 bg-brand-50 rounded-2xl"><button onClick={() => setViewMode('daily')} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${viewMode === 'daily' ? 'bg-white shadow text-brand-500' : 'opacity-40'}`}>Daily</button><button onClick={() => setViewMode('weekly')} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${viewMode === 'weekly' ? 'bg-white shadow text-brand-500' : 'opacity-40'}`}>Weekly</button></div></div>
+          {viewMode === 'daily' ? (
+            <div className="space-y-4">{MEALS.map(m => {
+              const p = myPlans.find(plan => plan.date === date && plan.meal === m);
+              const pf = p?.foodIds.map(id => foods.find(f => f.id === id)).filter(Boolean) || [];
+              const cov = new Set(pf.flatMap(f => f.categories || []));
+              const diffs = getChildDiffs(date, m);
+              return (<div key={m} onClick={() => setPicker({date, meal:m})} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-transparent active:scale-[0.98] transition-all">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-black text-xl capitalize text-brand-900">{m}</h3>
+                  <div className="flex gap-1">{BALANCE_CATEGORIES.map(c => (<span key={c} className={`text-[8px] px-1.5 py-0.5 rounded font-black ${cov.has(c) ? 'bg-brand-500 text-white' : 'bg-slate-100 text-slate-300'}`}>{c[0].toUpperCase()}</span>))}</div>
+                </div>
+                {pf.length ? <div className="space-y-2">
+                  {pf.map(f => (<div key={f.id} className="flex justify-between items-center bg-brand-50/50 p-3 rounded-xl text-sm font-bold"><span>{f.name}</span><RatingIcon foodId={f.id} servings={myServings} /></div>))}
+                  {/* Show other children's modifications */}
+                  {diffs && diffs.some(d => !d.same) && (
+                    <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100 mt-2">
+                      {diffs.map(d => {
+                        if (d.same) return <span key={d.child.id} className="text-[10px] text-neutral">{d.child.emoji} <i className="ph ph-check text-brand-500"></i></span>;
+                        const removedNames = d.removed.map(id => foods.find(f => f.id === id)?.name).filter(Boolean);
+                        const addedNames = d.added.map(id => foods.find(f => f.id === id)?.name).filter(Boolean);
+                        return (
+                          <span key={d.child.id} className="text-[10px] text-neutral">
+                            {d.child.emoji}{' '}
+                            {removedNames.length > 0 && <span className="text-accent">-{removedNames.join(', ')}</span>}
+                            {removedNames.length > 0 && addedNames.length > 0 && ' '}
+                            {addedNames.length > 0 && <span className="text-brand-500">+{addedNames.join(', ')}</span>}
+                            {d.removed.length === 0 && d.added.length === 0 && removedNames.length === 0 && addedNames.length === 0 && (
+                              <span className="text-neutral opacity-50">no meal</span>
+                            )}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div> : <p className="text-[10px] text-slate-200 border-2 border-dashed border-slate-100 rounded-2xl py-6 text-center font-black uppercase tracking-widest">+ Add Food</p>}
+              </div>);
+            })}</div>
+          ) : (
+            <div className="bg-white rounded-[2rem] border overflow-hidden"><div className="overflow-x-auto no-scrollbar"><div className="min-w-[500px]">
+              <div className="grid grid-cols-[60px_repeat(7,1fr)] bg-slate-50 border-b border-slate-100"><div />{weekDates.map((d, i) => (<div key={d} className={`py-3 text-center ${d === getTodayStr() ? 'bg-brand-500 text-white' : ''}`}><p className="text-[8px] font-black opacity-60">{DAY_LABELS[i]}</p><p className="text-xs font-black">{d.split('-')[2]}</p></div>))}</div>
+              {MEALS.map(meal => (<div key={meal} className="grid grid-cols-[60px_repeat(7,1fr)] border-b last:border-0"><div className="flex items-center justify-center p-2 text-[10px] font-black uppercase opacity-20">{meal[0]}</div>{weekDates.map(d => { const p = myPlans.find(plan => plan.date === d && plan.meal === meal); const cov = new Set(p?.foodIds.flatMap(id => foods.find(f => f.id === id)?.categories || [])); return (<div key={d} onClick={() => { setDate(d); setViewMode('daily'); }} className={`p-2 border-l flex flex-col items-center justify-center gap-1 ${d === date ? 'bg-brand-50/30' : ''}`}><div className="flex flex-wrap gap-0.5 justify-center">{BALANCE_CATEGORIES.map(c => (<div key={c} className={`w-2 h-2 rounded-full ${cov.has(c) ? 'bg-brand-500' : 'bg-slate-100'}`} />))}</div></div>); })}</div>))}
+            </div></div></div>
+          )}
+          {picker && <FoodPickerModal date={picker.date} meal={picker.meal} foods={foods} combos={combos} servings={servings} current={myPlans.find(p => p.date === picker.date && p.meal === picker.meal)?.foodIds || []} dispatch={dispatch} onClose={() => setPicker(null)} activeChildId={activeChildId} children={kids} settings={settings} />}
         </div>
       );
-    };
+    }
+
+    // FoodPickerModal: When sameMealDefault is ON, toggling a food dispatches
+    // TOGGLE_FOOD_IN_MEAL for ALL children. When OFF, only the active child.
+    function FoodPickerModal({ date, meal, foods, combos, servings, current, dispatch, onClose, activeChildId, children: kids, settings }) {
+      const [tab, setTab] = useState('pantry');
+      const [search, setSearch] = useState('');
+      const [cat, setCat] = useState(null);
+      const myServings = childServings(servings, activeChildId);
+      const covered = useMemo(() => { const s = new Set(); current.forEach(id => foods.find(f=>f.id===id)?.categories?.forEach(c=>s.add(c))); return s; }, [current, foods]);
+      const list = foods.filter(f => (tab === 'pantry' ? f.stock !== 'out' && f.source !== 'outside' : true) && f.name.toLowerCase().includes(search.toLowerCase()) && (!cat || f.categories?.includes(cat))).sort((a,b)=>a.name.localeCompare(b.name));
+
+      // Determine which children to target when toggling foods
+      const getTargetChildIds = () => {
+        if (settings?.sameMealDefault && kids.length > 1) return kids.map(c => c.id);
+        return [activeChildId];
+      };
+
+      const handleToggleFood = (foodId) => {
+        const targets = getTargetChildIds();
+        targets.forEach(cid => {
+          dispatch({ type: 'TOGGLE_FOOD_IN_MEAL', date, meal, childId: cid, foodId });
+        });
+      };
+
+      const handleApplyCombo = (comboFoodIds) => {
+        const targets = getTargetChildIds();
+        dispatch({ type: 'APPLY_COMBO', date, meal, childIds: targets, foodIds: comboFoodIds });
+      };
+
+      return (
+        <Modal onClose={onClose}><div className="p-6">
+          <h2 className="text-2xl font-black mb-2 text-brand-900 tracking-tight capitalize">Add to {meal}</h2>
+          {settings?.sameMealDefault && kids.length > 1 && (
+            <p className="text-[10px] font-bold text-brand-500 mb-3">
+              <i className="ph ph-users-three mr-1"></i>Adding for all kids — edit individually in daily view
+            </p>
+          )}
+          <input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="w-full bg-brand-50 p-4 rounded-2xl outline-none font-bold text-brand-900 mb-4" />
+          <div className="flex gap-2 overflow-x-auto no-scrollbar pb-4"><button onClick={() => setCat(null)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase ${!cat ? 'bg-brand-900 text-white' : 'bg-white border text-neutral'}`}>All</button>{CATEGORIES.map(c => (<button key={c.id} onClick={() => setCat(cat === c.id ? null : c.id)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase flex items-center gap-1.5 ${cat === c.id ? 'bg-brand-900 text-white' : 'bg-white border text-neutral'}`}>{covered.has(c.id) && <div className="w-1.5 h-1.5 rounded-full bg-brand-500" />} {c.label}</button>))}</div>
+          <div className="flex gap-1 p-1 bg-gray-100 rounded-2xl mb-4">{['pantry', 'library', 'combos'].map(t => (<button key={t} onClick={() => setTab(t)} className={`flex-1 py-2 text-[10px] uppercase font-black rounded-xl ${tab === t ? 'bg-white shadow text-brand-900' : 'text-gray-400'}`}>{t}</button>))}</div>
+          <div className="space-y-2 max-h-64 overflow-y-auto no-scrollbar">
+            {tab === 'combos'
+              ? (combos || []).map(c => (<button key={c.id} onClick={() => { handleApplyCombo(c.foodIds); onClose(); }} className="w-full p-4 bg-brand-50 rounded-2xl text-left border border-brand-100 active:scale-95 shadow-sm"><p className="font-black text-brand-900">{c.name}</p><p className="text-[10px] font-bold text-neutral uppercase mt-1 opacity-60">{c.foodIds.length} items</p></button>))
+              : list.map(f => {
+                  const sel = current.includes(f.id);
+                  return (<button key={f.id} onClick={() => handleToggleFood(f.id)} className={`w-full p-4 rounded-2xl border flex justify-between items-center transition-all active:scale-95 ${sel ? 'bg-brand-100 border-brand-500 text-brand-900 shadow-inner' : 'bg-white border-slate-100'}`}><span className="font-bold">{f.name}</span><RatingIcon foodId={f.id} servings={myServings} /></button>);
+                })
+            }
+          </div>
+          <button onClick={onClose} className="w-full mt-6 py-5 bg-brand-900 text-white rounded-3xl font-black uppercase shadow-xl">Done</button>
+        </div></Modal>
+      );
+    }
+
+    function ListView({ foods, plans, servings, title, selectionIds, setSelectionIds, onEdit, dispatch, showBatch, allFoods, children: kids, activeChildId }) {
+      const [search, setSearch] = useState('');
+      const [batchMode, setBatchMode] = useState(false);
+      const [input, setInput] = useState('');
+      const filtered = foods.filter(f => f.name.toLowerCase().includes(search.toLowerCase())).sort((a,b) => a.name.localeCompare(b.name));
+      const inSelect = selectionIds.length > 0;
+
+      // For per-child preference display
+      const myServings = childServings(servings, activeChildId);
+      const myPlans = childPlans(plans, activeChildId);
+
+      return (
+        <div className="animate-in pb-40 space-y-1.5"><div className="flex justify-between items-center mb-6 px-1"><h2 className="text-3xl font-black text-brand-900 tracking-tight">{title}</h2><div className="flex gap-2">{showBatch && <button onClick={() => setBatchMode(true)} className="bg-brand-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg">Batch</button>}<button onClick={() => setSelectionIds(inSelect ? [] : [filtered[0]?.id].filter(Boolean))} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase ${inSelect ? 'bg-brand-900 text-white' : 'bg-white border text-brand-500'}`}>{inSelect ? 'Cancel' : 'Select'}</button></div></div><input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="w-full p-3 mb-4 rounded-2xl bg-white shadow-sm border-none font-bold text-sm outline-none" />{filtered.map(f => { const sel = selectionIds.includes(f.id); return (<div key={f.id} onClick={() => inSelect ? setSelectionIds(p => p.includes(f.id) ? p.filter(x => x !== f.id) : [...p, f.id]) : onEdit(f)} className={`food-card bg-white px-4 py-2.5 rounded-xl border border-transparent shadow-sm flex justify-between items-center ${sel ? 'selected-card border-brand-500 scale-[0.98]' : 'border-b-slate-100'}`}><div className="flex items-center gap-3">{inSelect && <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${sel ? 'bg-brand-500 border-brand-500' : 'bg-white border-slate-200'}`}>{sel && <i className="ph ph-check text-[10px] text-white"></i>}</div>}<div><p className="font-bold text-sm">{f.source === 'outside' && '🍽️ '}{f.name}</p><div className="flex gap-1 mt-0.5"><p className="text-[8px] uppercase font-black text-neutral opacity-50 tracking-tighter">Tries: {calculateExposures(f.id, myPlans)}</p>{f.stock === 'low' && <span className="text-[8px] font-black text-amber-500 ml-1">Low</span>}</div></div></div><div className="flex items-center gap-2">{/* Show per-child preference badges when multiple children exist */}<ChildPreferenceBadges foodId={f.id} children={kids} servings={servings} />{/* Show active child's preference as the main icon */}{(!kids || kids.length < 2) && <RatingIcon foodId={f.id} servings={myServings} />}</div></div>); })}{batchMode && <Modal onClose={() => setBatchMode(false)}><div className="p-8"><h2 className="text-2xl font-black mb-4">Batch Import</h2><textarea value={input} onChange={e => setInput(e.target.value)} className="w-full h-40 bg-brand-50 rounded-2xl p-4 outline-none border-none font-bold" placeholder="Pizza, Peas, Pasta..." /><div className="flex gap-2 mt-6"><button onClick={() => setBatchMode(false)} className="flex-1 font-bold text-neutral uppercase text-[10px]">Cancel</button><button onClick={() => { dispatch({type:'BATCH_ADD', names: input.split(/[,\n]/)}); setBatchMode(false); setInput(''); }} className="flex-[2] bg-brand-500 text-white py-4 rounded-2xl font-black shadow-lg">Import</button></div></div></Modal>}<BulkActionBar selectedIds={selectionIds} onClear={() => setSelectionIds([])} dispatch={dispatch} foods={allFoods || foods} /></div>
+      );
+    }
+
+    // --- Core UI ---
+    function App() {
+      const [state, dispatch] = useReducer(appReducer, {
+        isLoaded: false, foods: [], plans: [], combos: [],
+        shoppingDismissed: [], foodMemory: {}, servings: [],
+        children: [], // Array of child objects
+        settings: { sameMealDefault: true, activeChildId: null }, // App-level settings
+      });
+      const [tab, setTab] = useState('today');
+      const [edit, setEdit] = useState(null);
+      const [pSelect, setPSelect] = useState([]);
+      const [lSelect, setLSelect] = useState([]);
+      const [quickSort, setQuickSort] = useState(false);
+
+      // Track the active child locally (synced to settings)
+      const activeChildId = state.settings?.activeChildId || state.children?.[0]?.id || null;
+      const setActiveChildId = (id) => dispatch({ type: 'UPDATE_SETTINGS', updates: { activeChildId: id } });
+
+      useEffect(() => {
+        const load = async () => {
+          let foods = await dbLoad('foods', []);
+          let plans = await dbLoad('plans', []);
+          const memory = await dbLoad('memory', {});
+          const dismissed = await dbLoad('dismissed', []);
+          const combos = await dbLoad('combos', []);
+          let servings = await dbLoad('servings', []);
+          let children = await dbLoad('children', []);
+          let settings = await dbLoad('settings', { sameMealDefault: true, activeChildId: null });
+
+          // --- Migration: convert old manual .rating fields to serving records ---
+          const hasOldRatings = foods.some(f => f.rating);
+          if (hasOldRatings) {
+            // Determine default child ID (will be 'default' after multi-child migration)
+            const defaultChildId = children.length > 0 ? children[0].id : 'default';
+            const migrated = migrateRatingsToServings(foods, servings, defaultChildId);
+            foods = migrated.foods;
+            servings = migrated.servings;
+            // Also clean rating out of foodMemory entries
+            const cleanMemory = {};
+            Object.entries(memory).forEach(([k, v]) => {
+              const { rating, ...rest } = v || {};
+              cleanMemory[k] = rest;
+            });
+            Object.assign(memory, cleanMemory);
+          }
+
+          // --- Migration: ensure multi-child data model is in place ---
+          const data = migrateToMultiChild({
+            foods, plans, combos, foodMemory: memory,
+            shoppingDismissed: dismissed, servings, children, settings
+          });
+
+          dispatch({ type: 'HYDRATE', payload: data });
+        };
+        load();
+      }, []);
+
+      useEffect(() => {
+        if (!state.isLoaded) return;
+        dbSave('foods', state.foods);
+        dbSave('plans', state.plans);
+        dbSave('memory', state.foodMemory);
+        dbSave('dismissed', state.shoppingDismissed);
+        dbSave('combos', state.combos);
+        dbSave('servings', state.servings);
+        dbSave('children', state.children);
+        dbSave('settings', state.settings);
+      }, [state]);
+
+      if (!state.isLoaded) return <div className="flex h-screen items-center justify-center text-brand-500 font-black animate-pulse uppercase">Loading</div>;
+
+      const NAV = [ {id:'today', i:'ph-house'}, {id:'pantry', i:'ph-package'}, {id:'library', i:'ph-books'}, {id:'planner', i:'ph-calendar-blank'}, {id:'shopping', i:'ph-shopping-cart'} ];
+
+      if (quickSort) return <div className="min-h-screen bg-brand-50"><QuickSortView foods={state.foods} dispatch={dispatch} onClose={() => setQuickSort(false)} /></div>;
+
+      return (
+        <div className="min-h-screen flex flex-col pt-8">
+          <main className="flex-1 max-w-md mx-auto w-full p-6">
+            {/* Child selector — appears when 2+ children exist */}
+            {state.children.length >= 2 && tab !== 'shopping' && (
+              <div className="mb-4">
+                <ChildSelector children={state.children} activeChildId={activeChildId} onSelect={setActiveChildId} settings={state.settings} dispatch={dispatch} />
+              </div>
+            )}
+            {tab === 'today' && <TodayView foods={state.foods} plans={state.plans} servings={state.servings} state={state} dispatch={dispatch} setQuickSort={setQuickSort} activeChildId={activeChildId} children={state.children} />}
+            {tab === 'pantry' && <ListView foods={state.foods.filter(f => f.stock !== 'out' && f.source !== 'outside')} plans={state.plans} servings={state.servings} title="Pantry" selectionIds={pSelect} setSelectionIds={setPSelect} onEdit={setEdit} dispatch={dispatch} showBatch allFoods={state.foods} children={state.children} activeChildId={activeChildId} />}
+            {tab === 'library' && <ListView foods={state.foods} plans={state.plans} servings={state.servings} title="Library" selectionIds={lSelect} setSelectionIds={setLSelect} onEdit={setEdit} dispatch={dispatch} allFoods={state.foods} children={state.children} activeChildId={activeChildId} />}
+            {tab === 'planner' && <MealPlannerView foods={state.foods} plans={state.plans} combos={state.combos} servings={state.servings} dispatch={dispatch} activeChildId={activeChildId} children={state.children} settings={state.settings} />}
+            {tab === 'shopping' && <ShoppingListView foods={state.foods} plans={state.plans} servings={state.servings} dismissed={state.shoppingDismissed} dispatch={dispatch} children={state.children} />}
+            {tab === 'family' && <FamilySettingsView children={state.children} settings={state.settings} dispatch={dispatch} activeChildId={activeChildId} setActiveChildId={setActiveChildId} />}
+          </main>
+          <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t flex justify-around p-3 pb-8 z-50">
+            {NAV.map(t => (<button key={t.id} onClick={() => setTab(t.id)} className={`flex flex-col items-center gap-1 transition-all ${tab === t.id ? 'scale-110 text-brand-500' : 'opacity-40 grayscale'}`}><i className={`${tab === t.id ? t.i + '-fill' : t.i} text-2xl`}></i><span className="text-[9px] font-black uppercase tracking-widest">{t.id}</span></button>))}
+            {/* Family/Settings tab */}
+            <button onClick={() => setTab('family')} className={`flex flex-col items-center gap-1 transition-all ${tab === 'family' ? 'scale-110 text-brand-500' : 'opacity-40 grayscale'}`}>
+              <i className={`${tab === 'family' ? 'ph-users-three-fill' : 'ph-users-three'} text-2xl`}></i>
+              <span className="text-[9px] font-black uppercase tracking-widest">Family</span>
+            </button>
+          </nav>
+          {edit && <FoodFormModal food={edit} plans={state.plans} servings={state.servings} onSave={(d) => { dispatch({type:'UPDATE_FOOD', id:edit.id, updates:d}); setEdit(null); }} onDelete={() => { dispatch({type:'DELETE_FOOD', id:edit.id}); setEdit(null); }} onClose={() => setEdit(null)} activeChildId={activeChildId} children={state.children} />}
+        </div>
+      );
+    }
+
+    // ==========================================================================
+    // COMPONENTS
+    // ==========================================================================
+
+    // FamilySettingsView: Manage children and family settings
+    function FamilySettingsView({ children: kids, settings, dispatch, activeChildId, setActiveChildId }) {
+      const [editChild, setEditChild] = useState(null); // child object being edited, or 'new'
+      const [confirmRemove, setConfirmRemove] = useState(null);
+
+      return (
+        <div className="animate-in pb-24">
+          <h2 className="text-3xl font-black text-brand-900 tracking-tight mb-6">Family</h2>
+
+          {/* Children list */}
+          <div className="space-y-3 mb-8">
+            {kids.sort((a, b) => a.order - b.order).map(child => (
+              <div key={child.id} className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <span className="text-3xl">{child.emoji}</span>
+                  <div>
+                    <p className="font-black text-brand-900 text-lg">{child.name}</p>
+                    <p className="text-[10px] font-bold text-neutral uppercase">Added {child.createdAt}</p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => setEditChild(child)}
+                    className="w-10 h-10 bg-brand-50 rounded-full flex items-center justify-center active:scale-90">
+                    <i className="ph ph-pencil-simple text-brand-500"></i>
+                  </button>
+                  {kids.length > 1 && (
+                    confirmRemove === child.id ? (
+                      <div className="flex gap-1">
+                        <button onClick={() => setConfirmRemove(null)}
+                          className="px-3 py-2 text-[10px] font-black text-neutral uppercase">Cancel</button>
+                        <button onClick={() => {
+                          dispatch({ type: 'REMOVE_CHILD', id: child.id });
+                          setConfirmRemove(null);
+                          // If we removed the active child, switch to the first remaining one
+                          if (activeChildId === child.id) {
+                            const remaining = kids.filter(c => c.id !== child.id);
+                            if (remaining.length > 0) setActiveChildId(remaining[0].id);
+                          }
+                        }}
+                          className="px-3 py-2 bg-accent text-white rounded-xl text-[10px] font-black uppercase">Remove</button>
+                      </div>
+                    ) : (
+                      <button onClick={() => setConfirmRemove(child.id)}
+                        className="w-10 h-10 bg-red-50 rounded-full flex items-center justify-center active:scale-90">
+                        <i className="ph ph-trash text-accent"></i>
+                      </button>
+                    )
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {/* Add child button */}
+            <button onClick={() => setEditChild('new')}
+              className="w-full p-5 rounded-[2rem] border-2 border-dashed border-brand-500 text-brand-500 font-black uppercase text-sm flex items-center justify-center gap-2 active:scale-95 transition-all">
+              <i className="ph ph-plus-circle text-xl"></i> Add Child
+            </button>
+          </div>
+
+          {/* Settings */}
+          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 mb-6">
+            <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-4">Meal Planning</p>
+            <button onClick={() => dispatch({ type: 'UPDATE_SETTINGS', updates: { sameMealDefault: !settings?.sameMealDefault } })}
+              className="w-full flex items-center justify-between p-4 bg-brand-50 rounded-2xl">
+              <div className="text-left">
+                <p className="font-bold text-brand-900">Same meal for all kids</p>
+                <p className="text-[10px] text-neutral font-bold mt-0.5">When adding food to a meal, add for everyone at once</p>
+              </div>
+              <div className={`w-12 h-7 rounded-full transition-all flex items-center px-1 ${settings?.sameMealDefault ? 'bg-brand-500' : 'bg-slate-300'}`}>
+                <div className={`w-5 h-5 bg-white rounded-full shadow transition-all ${settings?.sameMealDefault ? 'translate-x-5' : ''}`} />
+              </div>
+            </button>
+          </div>
+
+          {/* Child form modal */}
+          {editChild && (
+            <ChildFormModal
+              child={editChild === 'new' ? null : editChild}
+              existingChildren={kids}
+              onSave={(data) => {
+                if (editChild === 'new') {
+                  dispatch({ type: 'ADD_CHILD', name: data.name, emoji: data.emoji });
+                } else {
+                  dispatch({ type: 'UPDATE_CHILD', id: editChild.id, updates: { name: data.name, emoji: data.emoji } });
+                }
+                setEditChild(null);
+              }}
+              onClose={() => setEditChild(null)}
+            />
+          )}
+        </div>
+      );
+    }
+
+    // ChildFormModal: Add or edit a child's name and emoji
+    function ChildFormModal({ child, existingChildren, onSave, onClose }) {
+      const [name, setName] = useState(child?.name || '');
+      const [emoji, setEmoji] = useState(child?.emoji || CHILD_EMOJIS[existingChildren?.length % CHILD_EMOJIS.length || 0]);
+
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-8">
+            <h2 className="text-2xl font-black text-brand-900 mb-6">{child ? 'Edit Child' : 'Add Child'}</h2>
+
+            <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">Name</p>
+            <input type="text" value={name} onChange={e => setName(e.target.value)}
+              placeholder="Child's name..."
+              className="w-full p-4 bg-brand-50 rounded-2xl outline-none font-bold text-brand-900 mb-6"
+              autoFocus />
+
+            <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">Avatar</p>
+            <div className="flex flex-wrap gap-2 mb-6">
+              {CHILD_EMOJIS.map(e => (
+                <button key={e} onClick={() => setEmoji(e)}
+                  className={`w-12 h-12 rounded-2xl text-2xl flex items-center justify-center transition-all active:scale-90 ${
+                    emoji === e ? 'bg-brand-500 shadow-lg scale-110' : 'bg-white border border-slate-200'
+                  }`}>
+                  {e}
+                </button>
+              ))}
+            </div>
+
+            {/* Preview */}
+            <div className="bg-brand-50 p-4 rounded-2xl mb-6 flex items-center gap-3">
+              <span className="text-3xl">{emoji}</span>
+              <span className="font-black text-brand-900 text-lg">{name || 'Preview'}</span>
+            </div>
+
+            <button onClick={() => name.trim() && onSave({ name: name.trim(), emoji })}
+              disabled={!name.trim()}
+              className={`w-full py-5 rounded-3xl font-black uppercase shadow-xl transition-all ${
+                name.trim() ? 'bg-brand-500 text-white active:scale-95' : 'bg-slate-200 text-slate-400'
+              }`}>
+              {child ? 'Save Changes' : 'Add Child'}
+            </button>
+            <button onClick={onClose} className="w-full mt-3 py-3 text-neutral text-[10px] font-black uppercase">Cancel</button>
+          </div>
+        </Modal>
+      );
+    }
+
+    // FoodFormModal: Edit a single food's details. Now shows computed preference
+    // score and last 5 servings instead of a manual rating selector.
+    // Shows per-child preferences when multiple children exist.
+    function FoodFormModal({ food, plans, servings, onSave, onDelete, onClose, activeChildId, children: kids }) {
+      const [name, setName] = useState(food.name || '');
+      const [cats, setCats] = useState(food.categories || []);
+      const [stock, setStock] = useState(food.stock || 'in');
+      const [notes, setNotes] = useState(food.notes || '');
+      const [confirmDelete, setConfirmDelete] = useState(false);
+      // Which child's preference to show (default: active child)
+      const [viewChildId, setViewChildId] = useState(activeChildId);
+
+      const myPlans = childPlans(plans, viewChildId);
+      const myServings = childServings(servings, viewChildId);
+
+      const exposures = calculateExposures(food.id, myPlans);
+      const progress = Math.min(exposures / 15, 1);
+
+      // Compute the current preference score for the viewed child
+      const pref = getPreferenceScore(food.id, myServings);
+      // Get the last 5 servings for the history timeline
+      const recentServs = getRecentServings(food.id, myServings, 5);
+
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-8">
+            {/* Editable food name */}
+            <input type="text" value={name} onChange={e => setName(e.target.value)}
+              className="text-2xl font-black text-brand-900 mb-1 w-full bg-transparent outline-none border-b-2 border-transparent focus:border-brand-500 transition-colors"
+              placeholder="Food name..." />
+            {food.source === 'outside' && (
+              <p className="text-[10px] font-bold text-neutral uppercase tracking-widest mb-4">Restaurant Discovery</p>
+            )}
+
+            {/* Child selector for viewing per-child preferences */}
+            {kids && kids.length > 1 && (
+              <div className="flex gap-2 mb-4 mt-2 overflow-x-auto no-scrollbar">
+                {kids.map(child => (
+                  <button key={child.id} onClick={() => setViewChildId(child.id)}
+                    className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                      viewChildId === child.id ? 'bg-brand-500 text-white' : 'bg-white border border-slate-200 text-neutral'
+                    }`}>
+                    <span>{child.emoji}</span> {child.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Computed preference score display */}
+            {pref.rating ? (
+              <div className="flex items-center gap-3 mb-4 mt-2 bg-brand-50 p-4 rounded-2xl">
+                <RatingIcon ratingId={pref.ratingId} size="lg" />
+                <div>
+                  <p className="font-black text-brand-900">{pref.rating.label}</p>
+                  <p className="text-[10px] font-bold text-neutral">Score: {pref.score.toFixed(1)} / 10</p>
+                </div>
+              </div>
+            ) : (
+              <div className="mb-4 mt-2 bg-slate-50 p-4 rounded-2xl text-center">
+                <p className="text-[10px] font-black text-neutral uppercase tracking-widest">No preference data yet</p>
+              </div>
+            )}
+
+            {/* Last 5 servings timeline */}
+            {recentServs.length > 0 && (
+              <div className="mb-6">
+                <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">Recent Servings</p>
+                <div className="space-y-1.5">
+                  {recentServs.map(s => {
+                    const opt = EATEN_OPTIONS.find(e => e.id === s.eaten);
+                    return (
+                      <div key={s.id} className={`flex items-center justify-between p-3 rounded-xl border ${opt?.bg || 'bg-white border-slate-100'}`}>
+                        <div className="flex items-center gap-2">
+                          <i className={`${opt?.icon} ${opt?.color} text-lg`}></i>
+                          <span className="text-xs font-bold capitalize">{opt?.label || s.eaten}</span>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[10px] font-bold text-neutral">{s.date.split('-').slice(1).join('/')}</p>
+                          <p className="text-[8px] font-black uppercase text-neutral opacity-50">{s.meal}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Exposure progress bar */}
+            <div className="mb-6">
+              <div className="flex justify-between items-center mb-1">
+                <p className="text-[10px] font-black uppercase text-neutral tracking-widest">Exposure Progress</p>
+                <p className="text-[10px] font-black text-brand-500">{exposures}/15</p>
+              </div>
+              <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-full bg-accent rounded-full transition-all" style={{ width: `${progress * 100}%` }} />
+              </div>
+            </div>
+
+            {/* Category toggles */}
+            <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">Categories</p>
+            <div className="flex flex-wrap gap-2 mb-6">
+              {CATEGORIES.map(c => {
+                const active = cats.includes(c.id);
+                return (
+                  <button key={c.id}
+                    onClick={() => setCats(prev => active ? prev.filter(x => x !== c.id) : [...prev, c.id])}
+                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border transition-all ${active ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-neutral border-slate-200'}`}
+                  >{c.label}</button>
+                );
+              })}
+            </div>
+
+            {/* Stock status selector */}
+            <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">Stock</p>
+            <div className="flex gap-2 mb-6">
+              {STOCK_OPTIONS.map(s => (
+                <button key={s.id}
+                  onClick={() => setStock(s.id)}
+                  className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase border transition-all flex items-center justify-center gap-1.5 ${stock === s.id ? 'bg-brand-100 border-brand-500 text-brand-900' : 'bg-white border-slate-200 text-neutral'}`}
+                ><i className={`${s.icon} ${s.color}`}></i> {s.label}</button>
+              ))}
+            </div>
+
+            {/* Notes field */}
+            <textarea value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="Notes..." rows={2}
+              className="w-full p-4 bg-brand-50 rounded-2xl outline-none font-bold text-sm mb-6" />
+
+            {/* Action buttons — saves name, categories, stock, and notes */}
+            <button onClick={() => onSave({ name: name.trim() || food.name, categories: cats, stock, notes })}
+              className="w-full bg-brand-500 text-white py-5 rounded-3xl font-black uppercase shadow-xl mb-3">Save Changes</button>
+
+            {/* Delete with confirmation guard */}
+            {!confirmDelete ? (
+              <button onClick={() => setConfirmDelete(true)}
+                className="w-full py-3 text-accent text-[10px] font-black uppercase">Delete Food</button>
+            ) : (
+              <div className="flex gap-2">
+                <button onClick={() => setConfirmDelete(false)}
+                  className="flex-1 py-3 text-neutral text-[10px] font-black uppercase">Cancel</button>
+                <button onClick={onDelete}
+                  className="flex-1 py-3 bg-accent text-white rounded-2xl text-[10px] font-black uppercase">Confirm Delete</button>
+              </div>
+            )}
+          </div>
+        </Modal>
+      );
+    }
+
+    // BulkActionBar: Floating toolbar that appears when foods are selected
+    // in Pantry/Library. Lets you bulk-update stock, merge, or delete.
+    function BulkActionBar({ selectedIds, onClear, dispatch, foods }) {
+      const [confirmDelete, setConfirmDelete] = useState(false);
+      const [showMerge, setShowMerge] = useState(false);
+      if (selectedIds.length === 0) return null;
+
+      return (
+        <>
+          <div className="fixed bottom-24 left-0 right-0 z-40 flex justify-center animate-in">
+            <div className="bg-brand-900 text-white rounded-3xl shadow-2xl px-6 py-4 flex items-center gap-3 max-w-sm mx-4">
+              <span className="text-[10px] font-black uppercase tracking-widest opacity-60">
+                {selectedIds.length} selected
+              </span>
+              <div className="w-px h-6 bg-white/20" />
+              {/* Stock quick-actions */}
+              {STOCK_OPTIONS.map(s => (
+                <button key={s.id}
+                  onClick={() => { dispatch({ type: 'BULK_UPDATE', ids: selectedIds, updates: { stock: s.id } }); onClear(); }}
+                  className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center active:scale-90"
+                  title={`Mark ${s.label}`}
+                ><i className={`${s.icon} text-white text-sm`}></i></button>
+              ))}
+              <div className="w-px h-6 bg-white/20" />
+              {/* Merge button — only shows when 2+ foods selected */}
+              {selectedIds.length >= 2 && (
+                <button onClick={() => setShowMerge(true)}
+                  className="w-9 h-9 rounded-full bg-brand-500/40 flex items-center justify-center active:scale-90"
+                  title="Merge foods">
+                  <i className="ph ph-git-merge text-white text-sm"></i>
+                </button>
+              )}
+              {/* Delete with inline confirmation */}
+              {!confirmDelete ? (
+                <button onClick={() => setConfirmDelete(true)}
+                  className="w-9 h-9 rounded-full bg-accent/30 flex items-center justify-center active:scale-90">
+                  <i className="ph ph-trash text-accent text-sm"></i>
+                </button>
+              ) : (
+                <button onClick={() => { dispatch({ type: 'DELETE_FOODS', ids: selectedIds }); onClear(); setConfirmDelete(false); }}
+                  className="px-4 py-2 bg-accent rounded-xl text-[10px] font-black uppercase active:scale-90">
+                  Delete {selectedIds.length}?
+                </button>
+              )}
+            </div>
+          </div>
+          {/* Merge modal */}
+          {showMerge && (
+            <MergeModal
+              selectedIds={selectedIds}
+              foods={foods}
+              onMerge={(keepId, name) => {
+                dispatch({ type: 'MERGE_FOODS', allIds: selectedIds, keepId, name });
+                setShowMerge(false);
+                onClear();
+              }}
+              onClose={() => setShowMerge(false)}
+            />
+          )}
+        </>
+      );
+    }
+
+    // MergeModal: When merging 2+ foods, lets the user pick which name to keep
+    // or type a custom one. All servings, plans, and categories are consolidated.
+    function MergeModal({ selectedIds, foods, onMerge, onClose }) {
+      const selectedFoods = selectedIds.map(id => foods.find(f => f.id === id)).filter(Boolean);
+      // Default to the first selected food's name
+      const [keepId, setKeepId] = useState(selectedFoods[0]?.id || null);
+      const [customName, setCustomName] = useState('');
+      const [useCustom, setUseCustom] = useState(false);
+
+      const finalName = useCustom ? customName.trim() : selectedFoods.find(f => f.id === keepId)?.name;
+
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-8">
+            <h2 className="text-2xl font-black text-brand-900 mb-1">Merge Foods</h2>
+            <p className="text-[10px] font-black text-neutral uppercase tracking-widest mb-6">
+              Combine {selectedFoods.length} foods into one
+            </p>
+
+            {/* Pick which name to keep */}
+            <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">Keep which name?</p>
+            <div className="space-y-2 mb-4">
+              {selectedFoods.map(f => (
+                <button key={f.id}
+                  onClick={() => { setKeepId(f.id); setUseCustom(false); }}
+                  className={`w-full p-4 rounded-2xl border-2 text-left font-bold transition-all active:scale-95 ${
+                    !useCustom && keepId === f.id
+                      ? 'bg-brand-100 border-brand-500 text-brand-900'
+                      : 'bg-white border-slate-200 text-neutral'
+                  }`}>
+                  {f.name}
+                </button>
+              ))}
+            </div>
+
+            {/* Or type a custom name */}
+            <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">Or use a custom name</p>
+            <input type="text" value={customName}
+              onChange={e => { setCustomName(e.target.value); setUseCustom(true); }}
+              onFocus={() => setUseCustom(true)}
+              placeholder="Type a new name..."
+              className={`w-full p-4 rounded-2xl outline-none font-bold mb-6 border-2 transition-all ${
+                useCustom ? 'bg-brand-50 border-brand-500' : 'bg-white border-slate-200'
+              }`} />
+
+            {/* What will happen */}
+            <div className="bg-slate-50 p-4 rounded-2xl mb-6">
+              <p className="text-[10px] font-bold text-neutral">
+                All servings, meal plans, and categories from the selected foods will be combined into <span className="text-brand-900 font-black">{finalName || '...'}</span>. The other entries will be removed.
+              </p>
+            </div>
+
+            <button onClick={() => finalName && onMerge(keepId, finalName)}
+              disabled={!finalName}
+              className={`w-full py-5 rounded-3xl font-black uppercase shadow-xl transition-all ${
+                finalName ? 'bg-brand-500 text-white active:scale-95' : 'bg-slate-200 text-slate-400'
+              }`}>
+              Merge into "{finalName || '...'}"
+            </button>
+            <button onClick={onClose} className="w-full mt-3 py-3 text-neutral text-[10px] font-black uppercase">Cancel</button>
+          </div>
+        </Modal>
+      );
+    }
+
+    // QuickSortView: Card stack for rapidly categorizing foods.
+    // Now only handles categories (ratings are computed from servings).
+    function QuickSortView({ foods, dispatch, onClose }) {
+      // Snapshot the queue ONCE on mount so it doesn't shrink as we categorize foods.
+      // Without this, the useMemo recomputes on every dispatch (because foods changes),
+      // removing the food we just categorized — so the list shrinks while index grows
+      // and we hit the end at roughly the halfway mark.
+      const [queue] = useState(() =>
+        foods.filter(f => (f.categories?.length === 0))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      );
+      const [index, setIndex] = useState(0);
+      const current = queue[index];
+      const [cats, setCats] = useState([]);
+
+      // Reset local state whenever we move to a new card
+      useEffect(() => {
+        if (current) {
+          setCats(current.categories || []);
+        }
+      }, [index, current?.id]);
+
+      // Save current card and advance to next
+      const handleSave = () => {
+        if (current) {
+          dispatch({ type: 'UPDATE_FOOD', id: current.id, updates: { categories: cats } });
+        }
+        if (index < queue.length - 1) {
+          setIndex(i => i + 1);
+        } else {
+          onClose();
+        }
+      };
+
+      const handleSkip = () => {
+        if (index < queue.length - 1) setIndex(i => i + 1);
+        else onClose();
+      };
+
+      return (
+        <div className="min-h-screen bg-brand-50 p-6 flex flex-col">
+          <div className="flex justify-between items-center mb-6">
+            <button onClick={onClose} className="text-[10px] font-black uppercase text-neutral">
+              <i className="ph ph-x text-xl"></i>
+            </button>
+            <p className="text-[10px] font-black uppercase text-neutral tracking-widest">
+              {queue.length === 0 ? 'All done!' : `${index + 1} of ${queue.length}`}
+            </p>
+            <div className="w-8" />
+          </div>
+
+          {queue.length === 0 || !current ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-center">
+              <i className="ph ph-check-circle text-6xl text-brand-500 mb-4"></i>
+              <p className="text-2xl font-black text-brand-900 mb-2">All Sorted!</p>
+              <p className="text-sm text-neutral font-bold">Every food has categories.</p>
+              <button onClick={onClose} className="mt-8 bg-brand-500 text-white px-8 py-4 rounded-3xl font-black uppercase shadow-lg">Done</button>
+            </div>
+          ) : (
+            <div className="flex-1 flex flex-col">
+              <div className="w-full h-1.5 bg-slate-200 rounded-full mb-8 overflow-hidden">
+                <div className="h-full bg-brand-500 rounded-full transition-all" style={{ width: `${((index + 1) / queue.length) * 100}%` }} />
+              </div>
+              <div className="bg-white rounded-[2.5rem] p-8 shadow-xl flex-1 flex flex-col animate-in">
+                <h2 className="text-3xl font-black text-brand-900 text-center mb-8">{current.name}</h2>
+                <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-3">Categories</p>
+                <div className="flex flex-wrap gap-2 mb-8">
+                  {CATEGORIES.map(c => {
+                    const active = cats.includes(c.id);
+                    return (
+                      <button key={c.id}
+                        onClick={() => setCats(prev => active ? prev.filter(x => x !== c.id) : [...prev, c.id])}
+                        className={`px-4 py-2.5 rounded-xl text-[10px] font-black uppercase border transition-all ${active ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-neutral border-slate-200'}`}
+                      >{c.label}</button>
+                    );
+                  })}
+                </div>
+                <div className="mt-auto flex gap-3">
+                  <button onClick={handleSkip}
+                    className="flex-1 py-4 text-neutral font-black uppercase text-[10px] border border-slate-200 rounded-2xl">Skip</button>
+                  <button onClick={handleSave}
+                    className="flex-[2] py-4 bg-brand-500 text-white rounded-2xl font-black uppercase shadow-lg active:scale-95">
+                    {index < queue.length - 1 ? 'Save & Next' : 'Save & Done'}</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ShoppingListView: Generates a shopping list from foods that are low/out
+    // of stock. Now excludes foods disliked by ALL children (not just one).
+    function ShoppingListView({ foods, plans, servings, dismissed, dispatch, children: kids }) {
+      const items = useMemo(() => {
+        return foods
+          .filter(f => {
+            if (f.stock === 'in' || f.source === 'outside') return false;
+            if ((dismissed || []).includes(f.id)) return false;
+            // Exclude foods disliked by ALL children (universally disliked)
+            if (kids && kids.length > 0) {
+              const allDislike = kids.every(child => {
+                const cServings = childServings(servings, child.id);
+                const { ratingId } = getPreferenceScore(f.id, cServings);
+                return ratingId === 'dislikes';
+              });
+              if (allDislike) return false;
+            }
+            return true;
+          })
+          .sort((a, b) => a.name.localeCompare(b.name));
+      }, [foods, dismissed, servings, kids]);
+
+      const grouped = useMemo(() => {
+        const groups = {};
+        items.forEach(f => {
+          const cat = CATEGORIES.find(c => f.categories?.includes(c.id));
+          const aisle = cat?.aisle || 'Other';
+          if (!groups[aisle]) groups[aisle] = [];
+          groups[aisle].push(f);
+        });
+        return groups;
+      }, [items]);
+
+      const aisleOrder = ['Produce', 'Meat/Dairy', 'Pantry', 'Snacks', 'Other'];
+
+      const copyToClipboard = () => {
+        const lines = aisleOrder
+          .filter(a => grouped[a])
+          .map(a => `${a}:\n${grouped[a].map(f => `  ${f.name}${f.stock === 'out' ? '' : ' (low)'}`).join('\n')}`)
+          .join('\n\n');
+        navigator.clipboard.writeText(lines);
+      };
+
+      const markAllStocked = () => {
+        const ids = items.map(f => f.id);
+        if (ids.length > 0) {
+          dispatch({ type: 'BULK_UPDATE', ids, updates: { stock: 'in' } });
+        }
+      };
+
+      return (
+        <div className="animate-in pb-24">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-3xl font-black text-brand-900 tracking-tight">Shopping</h2>
+            <div className="flex gap-2">
+              <button onClick={copyToClipboard}
+                className="bg-brand-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg flex items-center gap-1">
+                <i className="ph ph-copy"></i> Copy
+              </button>
+            </div>
+          </div>
+
+          {items.length === 0 ? (
+            <div className="text-center py-20">
+              <i className="ph ph-check-circle text-5xl text-brand-500 mb-4"></i>
+              <p className="text-xl font-black text-brand-900 mb-2">All Stocked!</p>
+              <p className="text-sm text-neutral font-bold">Nothing to buy right now.</p>
+            </div>
+          ) : (
+            <>
+              {aisleOrder.filter(a => grouped[a]).map(aisle => (
+                <div key={aisle} className="mb-6">
+                  <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2 px-1">{aisle}</p>
+                  <div className="space-y-1.5">
+                    {grouped[aisle].map(f => (
+                      <div key={f.id} className="bg-white px-4 py-3 rounded-xl shadow-sm border border-slate-50 flex justify-between items-center">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-2.5 h-2.5 rounded-full ${f.stock === 'out' ? 'bg-accent' : 'bg-amber-400'}`} />
+                          <span className="font-bold text-sm">{f.name}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] font-black uppercase text-neutral opacity-50">
+                            {f.stock === 'out' ? 'Out' : 'Low'}
+                          </span>
+                          <button onClick={() => dispatch({ type: 'DISMISS_SHOPPING', id: f.id })}
+                            className="w-7 h-7 rounded-full bg-slate-50 flex items-center justify-center active:scale-90">
+                            <i className="ph ph-x text-xs text-neutral"></i>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <button onClick={markAllStocked}
+                className="w-full bg-brand-900 text-white py-5 rounded-3xl font-black uppercase shadow-xl mt-4">
+                <i className="ph ph-check-circle mr-2"></i>Done Shopping — Mark All Stocked
+              </button>
+            </>
+          )}
+        </div>
+      );
+    }
+
+    // DataModal: Export/Import all data including servings, children, and settings
+    function DataModal({ state, dispatch, onClose }) {
+      const [importing, setImporting] = useState(false);
+      const [importError, setImportError] = useState(null);
+      const [importSuccess, setImportSuccess] = useState(false);
+      const fileRef = useRef(null);
+
+      const handleExport = () => {
+        const exportData = {
+          version: 4, // v4 includes children and settings
+          exportedAt: new Date().toISOString(),
+          foods: state.foods,
+          plans: state.plans,
+          combos: state.combos,
+          foodMemory: state.foodMemory,
+          shoppingDismissed: state.shoppingDismissed,
+          servings: state.servings,
+          children: state.children,
+          settings: state.settings,
+        };
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const dateStr = new Date().toISOString().split('T')[0];
+        a.href = url;
+        a.download = `meal-tracker-backup-${dateStr}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      };
+
+      const handleImport = (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setImporting(true);
+        setImportError(null);
+        setImportSuccess(false);
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          try {
+            let data = JSON.parse(evt.target.result);
+            if (!data.foods || !Array.isArray(data.foods)) {
+              throw new Error('Invalid backup file — missing foods array.');
+            }
+            if (data.plans && !Array.isArray(data.plans)) {
+              throw new Error('Invalid backup file — plans is not an array.');
+            }
+            // If importing v3 or earlier, run multi-child migration
+            if (!data.children || data.children.length === 0) {
+              data = migrateToMultiChild(data);
+            }
+            dispatch({ type: 'IMPORT_DATA', payload: data });
+            setImportSuccess(true);
+            setImporting(false);
+          } catch (err) {
+            setImportError(err.message || 'Failed to parse backup file.');
+            setImporting(false);
+          }
+        };
+        reader.onerror = () => {
+          setImportError('Could not read the file.');
+          setImporting(false);
+        };
+        reader.readAsText(file);
+      };
+
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-8">
+            <h2 className="text-2xl font-black text-brand-900 mb-1">Your Data</h2>
+            <p className="text-[10px] font-black text-neutral uppercase tracking-widest mb-6">Export & Import</p>
+            <div className="bg-brand-50 rounded-2xl p-5 mb-6">
+              <div className="grid grid-cols-4 gap-3 text-center">
+                <div>
+                  <p className="text-2xl font-black text-brand-500">{state.foods.length}</p>
+                  <p className="text-[8px] font-black text-neutral uppercase">Foods</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-black text-brand-500">{state.plans.length}</p>
+                  <p className="text-[8px] font-black text-neutral uppercase">Plans</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-black text-brand-500">{state.servings.length}</p>
+                  <p className="text-[8px] font-black text-neutral uppercase">Servings</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-black text-brand-500">{state.children.length}</p>
+                  <p className="text-[8px] font-black text-neutral uppercase">Kids</p>
+                </div>
+              </div>
+            </div>
+            <button onClick={handleExport}
+              className="w-full bg-brand-500 text-white py-5 rounded-3xl font-black uppercase shadow-xl mb-3 flex items-center justify-center gap-2 active:scale-95 transition-all">
+              <i className="ph ph-download-simple text-lg"></i> Export Backup
+            </button>
+            <p className="text-[10px] text-neutral text-center mb-6 font-bold opacity-60">Downloads a JSON file with all your data</p>
+            <div className="border-t border-slate-100 pt-6">
+              <button onClick={() => fileRef.current?.click()} disabled={importing}
+                className="w-full bg-white border-2 border-dashed border-brand-500 text-brand-500 py-5 rounded-3xl font-black uppercase mb-3 flex items-center justify-center gap-2 active:scale-95 transition-all">
+                <i className="ph ph-upload-simple text-lg"></i>
+                {importing ? 'Importing...' : 'Import Backup'}
+              </button>
+              <input ref={fileRef} type="file" accept=".json" onChange={handleImport} className="hidden" />
+              <p className="text-[10px] text-neutral text-center font-bold opacity-60">Replaces all current data with the backup</p>
+              {importError && (
+                <div className="mt-4 bg-red-50 text-red-600 p-4 rounded-2xl text-xs font-bold text-center">
+                  <i className="ph ph-warning-circle mr-1"></i> {importError}
+                </div>
+              )}
+              {importSuccess && (
+                <div className="mt-4 bg-green-50 text-green-600 p-4 rounded-2xl text-xs font-bold text-center">
+                  <i className="ph ph-check-circle mr-1"></i> Data imported successfully!
+                </div>
+              )}
+            </div>
+            <button onClick={onClose} className="w-full mt-6 py-3 text-neutral text-[10px] font-black uppercase">Close</button>
+          </div>
+        </Modal>
+      );
+    }
+
+    // MealCheckInModal: Per-meal check-in flow. When multiple children have the
+    // same meal, shows all children together for fast side-by-side logging.
+    // When only one child (or independent meals), shows the classic single-child flow.
+    function MealCheckInModal({ meal, plans, foods, servings, dispatch, onClose, activeChildId, children: kids, settings }) {
+      const tStr = getTodayStr();
+
+      // Determine which children need check-in for this meal
+      const childrenToCheck = useMemo(() => {
+        return (kids || []).filter(child => {
+          const cPlans = childPlans(plans, child.id);
+          const cServings = childServings(servings, child.id);
+          const plan = cPlans.find(p => p.date === tStr && p.meal === meal);
+          if (!plan || plan.foodIds.length === 0) return false;
+          const hasServings = plan.foodIds.some(fid =>
+            cServings.some(s => s.foodId === fid && s.date === tStr && s.meal === meal)
+          );
+          return !hasServings;
+        });
+      }, [kids, plans, servings, tStr, meal]);
+
+      // If only one child or independent meals, use single-child mode
+      const multiMode = childrenToCheck.length > 1;
+
+      // Collect all unique foods across all children being checked in
+      const allFoodIds = useMemo(() => {
+        const ids = new Set();
+        childrenToCheck.forEach(child => {
+          const plan = plans.find(p => p.date === tStr && p.meal === meal && p.childId === child.id);
+          (plan?.foodIds || []).forEach(id => ids.add(id));
+        });
+        return [...ids];
+      }, [childrenToCheck, plans, tStr, meal]);
+
+      const allFoods = allFoodIds.map(id => foods.find(f => f.id === id)).filter(Boolean);
+
+      // Track selections: { `${childId}-${foodId}`: eaten }
+      const [selections, setSelections] = useState({});
+
+      // Count how many entries we need total
+      const totalNeeded = useMemo(() => {
+        let count = 0;
+        childrenToCheck.forEach(child => {
+          const plan = plans.find(p => p.date === tStr && p.meal === meal && p.childId === child.id);
+          count += (plan?.foodIds || []).length;
+        });
+        return count;
+      }, [childrenToCheck, plans, tStr, meal]);
+
+      const loggedCount = Object.keys(selections).length;
+      const allDone = loggedCount === totalNeeded;
+
+      const handleSelect = (childId, foodId, eaten) => {
+        setSelections(prev => ({ ...prev, [`${childId}-${foodId}`]: eaten }));
+      };
+
+      // Save all selections as serving records
+      const handleSave = () => {
+        const entries = Object.entries(selections).map(([key, eaten]) => {
+          const [childId, foodId] = key.split('-');
+          return { foodId, date: tStr, meal, childId, eaten };
+        });
+        if (entries.length > 0) {
+          dispatch({ type: 'LOG_SERVINGS_BATCH', entries });
+        }
+        onClose();
+      };
+
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-8">
+            <h2 className="text-2xl font-black text-brand-900 mb-1 capitalize">How was {meal}?</h2>
+            <p className="text-[10px] font-black text-neutral uppercase tracking-widest mb-6">
+              {loggedCount} of {totalNeeded} logged
+            </p>
+
+            {multiMode ? (
+              /* Multi-child mode: show each food with per-child eaten toggles */
+              <div className="space-y-4">
+                {allFoods.map(f => (
+                  <div key={f.id} className="bg-brand-50 rounded-2xl p-5 border border-brand-100">
+                    <p className="font-black text-brand-900 mb-3">{f.name}</p>
+                    <div className="space-y-2">
+                      {childrenToCheck.map(child => {
+                        // Only show this food for children who actually have it in their meal
+                        const plan = plans.find(p => p.date === tStr && p.meal === meal && p.childId === child.id);
+                        if (!plan?.foodIds.includes(f.id)) return null;
+                        const key = `${child.id}-${f.id}`;
+                        const selected = selections[key];
+                        return (
+                          <div key={child.id} className="flex items-center gap-2">
+                            <span className="text-lg w-8 text-center">{child.emoji}</span>
+                            <div className="flex gap-1.5 flex-1">
+                              {EATEN_OPTIONS.map(opt => {
+                                const isSelected = selected === opt.id;
+                                return (
+                                  <button key={opt.id}
+                                    onClick={() => handleSelect(child.id, f.id, opt.id)}
+                                    className={`flex-1 py-2 rounded-lg border text-center transition-all active:scale-95 ${
+                                      isSelected
+                                        ? `${opt.bg} border-current`
+                                        : 'bg-white border-slate-200 opacity-30'
+                                    }`}>
+                                    <i className={`${opt.icon} ${opt.color} text-lg`}></i>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              /* Single-child mode: classic flow */
+              <div className="space-y-4">
+                {childrenToCheck.map(child => {
+                  const plan = plans.find(p => p.date === tStr && p.meal === meal && p.childId === child.id);
+                  const mealFoods = (plan?.foodIds || []).map(id => foods.find(f => f.id === id)).filter(Boolean);
+                  return mealFoods.map(f => {
+                    const key = `${child.id}-${f.id}`;
+                    const selected = selections[key];
+                    return (
+                      <div key={key} className="bg-brand-50 rounded-2xl p-5 border border-brand-100">
+                        <p className="font-black text-brand-900 mb-3">{f.name}</p>
+                        <div className="flex gap-2">
+                          {EATEN_OPTIONS.map(opt => {
+                            const isSelected = selected === opt.id;
+                            return (
+                              <button key={opt.id}
+                                onClick={() => handleSelect(child.id, f.id, opt.id)}
+                                className={`flex-1 py-3 rounded-xl border-2 flex flex-col items-center gap-1 transition-all active:scale-95 ${
+                                  isSelected
+                                    ? `${opt.bg} border-current ring-1 ring-current scale-[1.02]`
+                                    : 'bg-white border-slate-200 opacity-40'
+                                }`}
+                              >
+                                <i className={`${opt.icon} ${opt.color} text-2xl`}></i>
+                                <span className="text-[9px] font-black uppercase">{opt.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  });
+                })}
+              </div>
+            )}
+
+            <button onClick={handleSave}
+              disabled={!allDone}
+              className={`w-full mt-6 py-5 rounded-3xl font-black uppercase shadow-xl transition-all ${
+                allDone
+                  ? 'bg-brand-500 text-white active:scale-95'
+                  : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+              }`}>
+              {allDone ? 'Save' : `${totalNeeded - loggedCount} remaining`}
+            </button>
+            <button onClick={onClose} className="w-full mt-3 py-3 text-neutral text-[10px] font-black uppercase">
+              Finish Later
+            </button>
+          </div>
+        </Modal>
+      );
+    }
+
+    // DiscoveryModal: Log a restaurant discovery with an initial eating rating.
+    // Now supports multi-child: can select which children tried the food.
+    function DiscoveryModal({ dispatch, onClose, activeChildId, children: kids, settings }) {
+      const [name, setName] = useState('');
+      const [eaten, setEaten] = useState(null);
+      // Track which children tried this discovery — default all if sameMealDefault
+      const [selectedKids, setSelectedKids] = useState(
+        settings?.sameMealDefault && kids.length > 1 ? kids.map(c => c.id) : [activeChildId]
+      );
+
+      const toggleChild = (id) => {
+        setSelectedKids(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+      };
+
+      const handleSave = () => {
+        if (!name.trim()) return;
+        dispatch({ type: 'DISCOVER_FOOD', name, eaten, childIds: selectedKids });
+        onClose();
+      };
+
+      return (
+        <Modal onClose={onClose}>
+          <div className="p-8">
+            <h2 className="text-2xl font-black mb-1">Discovery</h2>
+            <p className="text-[10px] font-black text-neutral uppercase tracking-widest mb-6">Log a new restaurant find</p>
+            <div className="space-y-6">
+              <input autoFocus type="text" value={name} onChange={e => setName(e.target.value)}
+                placeholder="Food Name..."
+                className="w-full p-4 bg-brand-50 rounded-2xl outline-none font-bold" />
+
+              {/* Which children tried it? (only shown if 2+ children) */}
+              {kids.length > 1 && (
+                <div>
+                  <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">Who tried it?</p>
+                  <div className="flex gap-2 flex-wrap">
+                    {kids.map(child => {
+                      const sel = selectedKids.includes(child.id);
+                      return (
+                        <button key={child.id} onClick={() => toggleChild(child.id)}
+                          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-bold transition-all active:scale-95 ${
+                            sel ? 'bg-brand-500 text-white' : 'bg-white border border-slate-200 text-neutral'
+                          }`}>
+                          <span>{child.emoji}</span> {child.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* How much did they eat? */}
+              <div>
+                <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">How much was eaten?</p>
+                <div className="flex gap-2">
+                  {EATEN_OPTIONS.map(opt => {
+                    const isSelected = eaten === opt.id;
+                    return (
+                      <button key={opt.id}
+                        onClick={() => setEaten(isSelected ? null : opt.id)}
+                        className={`flex-1 py-4 rounded-xl border-2 flex flex-col items-center gap-1 transition-all ${
+                          isSelected
+                            ? `${opt.bg} border-current`
+                            : 'bg-white border-slate-200 opacity-30'
+                        }`}
+                      >
+                        <i className={`${opt.icon} ${opt.color} text-3xl`}></i>
+                        <span className="text-[8px] font-black uppercase">{opt.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <button onClick={handleSave}
+                className="w-full bg-brand-500 text-white p-5 rounded-3xl font-black shadow-lg uppercase">
+                Add to dinner
+              </button>
+            </div>
+          </div>
+        </Modal>
+      );
+    }
 
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
