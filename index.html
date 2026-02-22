@@ -221,22 +221,23 @@
         case 'DISCOVER_FOOD': {
           const name = action.name.trim();
           const foodId = generateId();
+          const discoverMeal = action.meal || 'dinner';
           const newFood = { id: foodId, name, categories: [], stock: 'out', notes: '', source: 'outside', createdAt: getTodayStr() };
           // Determine which children get this discovery
           const targetChildren = action.childIds || [action.childId || state.children?.[0]?.id];
           let newPlans = [...state.plans];
           let newServings = [...state.servings];
           targetChildren.forEach(cid => {
-            // Add to today's dinner plan for each target child
-            const plan = newPlans.find(p => p.date === getTodayStr() && p.meal === 'dinner' && p.childId === cid);
+            // Add to today's selected meal plan for each target child
+            const plan = newPlans.find(p => p.date === getTodayStr() && p.meal === discoverMeal && p.childId === cid);
             if (plan) {
               newPlans = newPlans.map(p => p.id === plan.id ? { ...p, foodIds: [...p.foodIds, foodId] } : p);
             } else {
-              newPlans.push({ id: generateId(), date: getTodayStr(), meal: 'dinner', childId: cid, foodIds: [foodId] });
+              newPlans.push({ id: generateId(), date: getTodayStr(), meal: discoverMeal, childId: cid, foodIds: [foodId] });
             }
             // Log the initial eating event if an eaten value was provided
             if (action.eaten) {
-              newServings.push({ id: generateId(), foodId, date: getTodayStr(), meal: 'dinner', childId: cid, eaten: action.eaten });
+              newServings.push({ id: generateId(), foodId, date: getTodayStr(), meal: discoverMeal, childId: cid, eaten: action.eaten });
             }
           });
           return { ...state, foods: [...state.foods, newFood], plans: newPlans, servings: newServings };
@@ -311,9 +312,13 @@
 
         // Log a batch of servings at once (from the meal check-in flow)
         // action.entries is an array of { foodId, date, meal, childId, eaten }
+        // Upserts: removes existing servings for matching food+date+meal+child before adding
         case 'LOG_SERVINGS_BATCH': {
           const newServings = action.entries.map(e => ({ id: generateId(), ...e }));
-          return { ...state, servings: [...state.servings, ...newServings] };
+          // Build a set of keys to replace
+          const replaceKeys = new Set(action.entries.map(e => `${e.foodId}-${e.date}-${e.meal}-${e.childId}`));
+          const filtered = state.servings.filter(s => !replaceKeys.has(`${s.foodId}-${s.date}-${s.meal}-${s.childId}`));
+          return { ...state, servings: [...filtered, ...newServings] };
         }
 
         // --- Child management actions ---
@@ -418,11 +423,27 @@
     };
 
     // --- UI Helpers ---
-    const Modal = ({ children, onClose }) => (
-      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-brand-900/60 p-4 animate-in" onClick={(e) => e.target === e.currentTarget && onClose()}>
-        <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-md max-h-[85vh] overflow-y-auto">{children}</div>
-      </div>
-    );
+    const Modal = ({ children, onClose }) => {
+      const [kbOffset, setKbOffset] = useState(0);
+      useEffect(() => {
+        const vv = window.visualViewport;
+        if (!vv) return;
+        const onResize = () => {
+          // Difference between layout viewport and visual viewport = keyboard height
+          const offset = window.innerHeight - vv.height;
+          setKbOffset(offset > 50 ? offset : 0);
+        };
+        vv.addEventListener('resize', onResize);
+        return () => vv.removeEventListener('resize', onResize);
+      }, []);
+      return (
+        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-brand-900/60 p-4 animate-in"
+          style={kbOffset > 0 ? { paddingBottom: `${kbOffset + 16}px` } : undefined}
+          onClick={(e) => e.target === e.currentTarget && onClose()}>
+          <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-md max-h-[85vh] overflow-y-auto">{children}</div>
+        </div>
+      );
+    };
 
     // RatingIcon: renders a preference icon based on computed score from servings.
     // Pass foodId + servings for computed mode, or ratingId for direct mode.
@@ -583,6 +604,18 @@
         });
       }, [myPlans, myServings, tStr]);
 
+      // Find meals that have already been checked in (have servings logged)
+      const checkedMeals = useMemo(() => {
+        return MEALS.filter(meal => {
+          const plan = myPlans.find(p => p.date === tStr && p.meal === meal);
+          if (!plan || plan.foodIds.length === 0) return false;
+          const hasServings = plan.foodIds.some(fid =>
+            myServings.some(s => s.foodId === fid && s.date === tStr && s.meal === meal)
+          );
+          return hasServings;
+        });
+      }, [myPlans, myServings, tStr]);
+
       const activeChild = kids.find(c => c.id === activeChildId);
 
       // For multi-child check-in: find which children need checking in for a meal
@@ -683,6 +716,20 @@
                   </button>
                 );
               })}
+            </div>
+          )}
+
+          {/* ---- Already checked-in meals (editable) ---- */}
+          {checkedMeals.length > 0 && (
+            <div className="flex gap-2 overflow-x-auto no-scrollbar mb-4">
+              {checkedMeals.map(meal => (
+                <button key={meal} onClick={() => setCheckInMeal(meal)}
+                  className="flex items-center gap-2 px-4 py-3 bg-white border border-brand-100 rounded-2xl active:scale-95 transition-all whitespace-nowrap">
+                  <i className="ph-fill ph-check-circle text-brand-500"></i>
+                  <span className="text-sm font-bold text-brand-900 capitalize">{meal}</span>
+                  <i className="ph ph-pencil-simple text-neutral text-xs"></i>
+                </button>
+              ))}
             </div>
           )}
 
@@ -920,15 +967,152 @@
       const [search, setSearch] = useState('');
       const [batchMode, setBatchMode] = useState(false);
       const [input, setInput] = useState('');
-      const filtered = foods.filter(f => f.name.toLowerCase().includes(search.toLowerCase())).sort((a,b) => a.name.localeCompare(b.name));
+      const [filterCat, setFilterCat] = useState(null);
+      const [filterPref, setFilterPref] = useState(null);
+      const [sortBy, setSortBy] = useState('name'); // 'name' | 'recent' | 'times'
+      const [showFilters, setShowFilters] = useState(false);
       const inSelect = selectionIds.length > 0;
 
       // For per-child preference display
       const myServings = childServings(servings, activeChildId);
       const myPlans = childPlans(plans, activeChildId);
 
+      const filtered = useMemo(() => {
+        let list = foods.filter(f => f.name.toLowerCase().includes(search.toLowerCase()));
+        if (filterCat) list = list.filter(f => f.categories?.includes(filterCat));
+        if (filterPref) list = list.filter(f => getPreferenceScore(f.id, myServings).ratingId === filterPref);
+
+        if (sortBy === 'recent') {
+          list = [...list].sort((a, b) => {
+            const aLast = myServings.filter(s => s.foodId === a.id).sort((x, y) => y.date.localeCompare(x.date))[0]?.date || '';
+            const bLast = myServings.filter(s => s.foodId === b.id).sort((x, y) => y.date.localeCompare(x.date))[0]?.date || '';
+            return bLast.localeCompare(aLast);
+          });
+        } else if (sortBy === 'times') {
+          list = [...list].sort((a, b) => calculateExposures(b.id, myPlans) - calculateExposures(a.id, myPlans));
+        } else {
+          list = [...list].sort((a, b) => a.name.localeCompare(b.name));
+        }
+        return list;
+      }, [foods, search, filterCat, filterPref, sortBy, myServings, myPlans]);
+
+      const SORT_OPTIONS = [
+        { id: 'name', label: 'A-Z', icon: 'ph-sort-ascending' },
+        { id: 'recent', label: 'Recent', icon: 'ph-clock' },
+        { id: 'times', label: 'Tries', icon: 'ph-repeat' },
+      ];
+
       return (
-        <div className="animate-in pb-40 space-y-1.5"><div className="flex justify-between items-center mb-6 px-1"><h2 className="text-3xl font-black text-brand-900 tracking-tight">{title}</h2><div className="flex gap-2">{showBatch && <button onClick={() => setBatchMode(true)} className="bg-brand-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg">Batch</button>}<button onClick={() => setSelectionIds(inSelect ? [] : [filtered[0]?.id].filter(Boolean))} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase ${inSelect ? 'bg-brand-900 text-white' : 'bg-white border text-brand-500'}`}>{inSelect ? 'Cancel' : 'Select'}</button></div></div><input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="w-full p-3 mb-4 rounded-2xl bg-white shadow-sm border-none font-bold text-sm outline-none" />{filtered.map(f => { const sel = selectionIds.includes(f.id); return (<div key={f.id} onClick={() => inSelect ? setSelectionIds(p => p.includes(f.id) ? p.filter(x => x !== f.id) : [...p, f.id]) : onEdit(f)} className={`food-card bg-white px-4 py-2.5 rounded-xl border border-transparent shadow-sm flex justify-between items-center ${sel ? 'selected-card border-brand-500 scale-[0.98]' : 'border-b-slate-100'}`}><div className="flex items-center gap-3">{inSelect && <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${sel ? 'bg-brand-500 border-brand-500' : 'bg-white border-slate-200'}`}>{sel && <i className="ph ph-check text-[10px] text-white"></i>}</div>}<div><p className="font-bold text-sm">{f.source === 'outside' && '🍽️ '}{f.name}</p><div className="flex gap-1 mt-0.5"><p className="text-[8px] uppercase font-black text-neutral opacity-50 tracking-tighter">Tries: {calculateExposures(f.id, myPlans)}</p>{f.stock === 'low' && <span className="text-[8px] font-black text-amber-500 ml-1">Low</span>}</div></div></div><div className="flex items-center gap-2">{/* Show per-child preference badges when multiple children exist */}<ChildPreferenceBadges foodId={f.id} children={kids} servings={servings} />{/* Show active child's preference as the main icon */}{(!kids || kids.length < 2) && <RatingIcon foodId={f.id} servings={myServings} />}</div></div>); })}{batchMode && <Modal onClose={() => setBatchMode(false)}><div className="p-8"><h2 className="text-2xl font-black mb-4">Batch Import</h2><textarea value={input} onChange={e => setInput(e.target.value)} className="w-full h-40 bg-brand-50 rounded-2xl p-4 outline-none border-none font-bold" placeholder="Pizza, Peas, Pasta..." /><div className="flex gap-2 mt-6"><button onClick={() => setBatchMode(false)} className="flex-1 font-bold text-neutral uppercase text-[10px]">Cancel</button><button onClick={() => { dispatch({type:'BATCH_ADD', names: input.split(/[,\n]/)}); setBatchMode(false); setInput(''); }} className="flex-[2] bg-brand-500 text-white py-4 rounded-2xl font-black shadow-lg">Import</button></div></div></Modal>}<BulkActionBar selectedIds={selectionIds} onClear={() => setSelectionIds([])} dispatch={dispatch} foods={allFoods || foods} /></div>
+        <div className="animate-in pb-40 space-y-1.5">
+          <div className="flex justify-between items-center mb-6 px-1">
+            <h2 className="text-3xl font-black text-brand-900 tracking-tight">{title}</h2>
+            <div className="flex gap-2">
+              {showBatch && <button onClick={() => setBatchMode(true)} className="bg-brand-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg">Batch</button>}
+              <button onClick={() => setSelectionIds(inSelect ? [] : [filtered[0]?.id].filter(Boolean))} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase ${inSelect ? 'bg-brand-900 text-white' : 'bg-white border text-brand-500'}`}>{inSelect ? 'Cancel' : 'Select'}</button>
+            </div>
+          </div>
+
+          {/* Search + filter toggle */}
+          <div className="flex gap-2 mb-2">
+            <input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="flex-1 p-3 rounded-2xl bg-white shadow-sm border-none font-bold text-sm outline-none" />
+            <button onClick={() => setShowFilters(v => !v)}
+              className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-90 ${showFilters || filterCat || filterPref ? 'bg-brand-500 text-white shadow-lg' : 'bg-white text-neutral shadow-sm'}`}>
+              <i className="ph-bold ph-funnel text-sm"></i>
+            </button>
+          </div>
+
+          {/* Filter & sort controls */}
+          {showFilters && (
+            <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mb-2 space-y-3 animate-in">
+              {/* Category filter */}
+              <div>
+                <p className="text-[8px] font-black uppercase text-neutral tracking-widest mb-1.5">Category</p>
+                <div className="flex gap-1.5 flex-wrap">
+                  <button onClick={() => setFilterCat(null)} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase ${!filterCat ? 'bg-brand-900 text-white' : 'bg-slate-100 text-neutral'}`}>All</button>
+                  {CATEGORIES.map(c => (
+                    <button key={c.id} onClick={() => setFilterCat(filterCat === c.id ? null : c.id)}
+                      className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase ${filterCat === c.id ? 'bg-brand-900 text-white' : 'bg-slate-100 text-neutral'}`}>{c.label}</button>
+                  ))}
+                </div>
+              </div>
+              {/* Preference filter */}
+              <div>
+                <p className="text-[8px] font-black uppercase text-neutral tracking-widest mb-1.5">Preference</p>
+                <div className="flex gap-1.5 flex-wrap">
+                  <button onClick={() => setFilterPref(null)} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase ${!filterPref ? 'bg-brand-900 text-white' : 'bg-slate-100 text-neutral'}`}>All</button>
+                  {RATINGS.map(r => (
+                    <button key={r.id} onClick={() => setFilterPref(filterPref === r.id ? null : r.id)}
+                      className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase flex items-center gap-1 ${filterPref === r.id ? 'bg-brand-900 text-white' : 'bg-slate-100 text-neutral'}`}>
+                      <i className={`${r.icon} ${filterPref === r.id ? 'text-white' : r.color} text-xs`}></i> {r.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {/* Sort */}
+              <div>
+                <p className="text-[8px] font-black uppercase text-neutral tracking-widest mb-1.5">Sort</p>
+                <div className="flex gap-1.5">
+                  {SORT_OPTIONS.map(s => (
+                    <button key={s.id} onClick={() => setSortBy(s.id)}
+                      className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase flex items-center gap-1 ${sortBy === s.id ? 'bg-brand-500 text-white' : 'bg-slate-100 text-neutral'}`}>
+                      <i className={`${s.icon} text-xs`}></i> {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Active filter pills */}
+          {(filterCat || filterPref) && !showFilters && (
+            <div className="flex gap-1.5 mb-2 flex-wrap">
+              {filterCat && (
+                <button onClick={() => setFilterCat(null)} className="flex items-center gap-1 px-3 py-1.5 bg-brand-100 text-brand-900 rounded-lg text-[9px] font-black uppercase">
+                  {CATEGORIES.find(c => c.id === filterCat)?.label} <i className="ph ph-x text-[8px]"></i>
+                </button>
+              )}
+              {filterPref && (
+                <button onClick={() => setFilterPref(null)} className="flex items-center gap-1 px-3 py-1.5 bg-brand-100 text-brand-900 rounded-lg text-[9px] font-black uppercase">
+                  {RATINGS.find(r => r.id === filterPref)?.label} <i className="ph ph-x text-[8px]"></i>
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Food list */}
+          {filtered.map(f => {
+            const sel = selectionIds.includes(f.id);
+            return (
+              <div key={f.id} onClick={() => inSelect ? setSelectionIds(p => p.includes(f.id) ? p.filter(x => x !== f.id) : [...p, f.id]) : onEdit(f)}
+                className={`food-card bg-white px-4 py-2.5 rounded-xl border border-transparent shadow-sm flex justify-between items-center ${sel ? 'selected-card border-brand-500 scale-[0.98]' : 'border-b-slate-100'}`}>
+                <div className="flex items-center gap-3">
+                  {inSelect && <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${sel ? 'bg-brand-500 border-brand-500' : 'bg-white border-slate-200'}`}>{sel && <i className="ph ph-check text-[10px] text-white"></i>}</div>}
+                  <div>
+                    <p className="font-bold text-sm">{f.source === 'outside' && '🍽️ '}{f.name}</p>
+                    <div className="flex gap-1 mt-0.5">
+                      <p className="text-[8px] uppercase font-black text-neutral opacity-50 tracking-tighter">Tries: {calculateExposures(f.id, myPlans)}</p>
+                      {f.stock === 'low' && <span className="text-[8px] font-black text-amber-500 ml-1">Low</span>}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <ChildPreferenceBadges foodId={f.id} children={kids} servings={servings} />
+                  {(!kids || kids.length < 2) && <RatingIcon foodId={f.id} servings={myServings} />}
+                </div>
+              </div>
+            );
+          })}
+
+          {filtered.length === 0 && (
+            <div className="text-center py-12">
+              <i className="ph ph-magnifying-glass text-3xl text-slate-300 mb-2"></i>
+              <p className="text-sm font-bold text-neutral">No foods match your filters</p>
+            </div>
+          )}
+
+          {batchMode && <Modal onClose={() => setBatchMode(false)}><div className="p-8"><h2 className="text-2xl font-black mb-4">Batch Import</h2><textarea value={input} onChange={e => setInput(e.target.value)} className="w-full h-40 bg-brand-50 rounded-2xl p-4 outline-none border-none font-bold" placeholder="Pizza, Peas, Pasta..." /><div className="flex gap-2 mt-6"><button onClick={() => setBatchMode(false)} className="flex-1 font-bold text-neutral uppercase text-[10px]">Cancel</button><button onClick={() => { dispatch({type:'BATCH_ADD', names: input.split(/[,\n]/)}); setBatchMode(false); setInput(''); }} className="flex-[2] bg-brand-500 text-white py-4 rounded-2xl font-black shadow-lg">Import</button></div></div></Modal>}
+          <BulkActionBar selectedIds={selectionIds} onClear={() => setSelectionIds([])} dispatch={dispatch} foods={allFoods || foods} />
+        </div>
       );
     }
 
@@ -1584,12 +1768,41 @@
 
       const aisleOrder = ['Produce', 'Meat/Dairy', 'Pantry', 'Snacks', 'Other'];
 
-      const copyToClipboard = () => {
+      const [copied, setCopied] = useState(false);
+      const copyToClipboard = async () => {
         const lines = aisleOrder
           .filter(a => grouped[a])
           .map(a => `${a}:\n${grouped[a].map(f => `  ${f.name}${f.stock === 'out' ? '' : ' (low)'}`).join('\n')}`)
           .join('\n\n');
-        navigator.clipboard.writeText(lines);
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(lines);
+          } else {
+            // Fallback for iOS PWA / non-HTTPS contexts
+            const ta = document.createElement('textarea');
+            ta.value = lines;
+            ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+          }
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        } catch (err) {
+          // Last resort fallback
+          const ta = document.createElement('textarea');
+          ta.value = lines;
+          ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        }
       };
 
       const markAllStocked = () => {
@@ -1605,8 +1818,8 @@
             <h2 className="text-3xl font-black text-brand-900 tracking-tight">Shopping</h2>
             <div className="flex gap-2">
               <button onClick={copyToClipboard}
-                className="bg-brand-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg flex items-center gap-1">
-                <i className="ph ph-copy"></i> Copy
+                className={`${copied ? 'bg-brand-900' : 'bg-brand-500'} text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg flex items-center gap-1 transition-all`}>
+                <i className={copied ? 'ph ph-check' : 'ph ph-copy'}></i> {copied ? 'Copied!' : 'Copy'}
               </button>
             </div>
           </div>
@@ -1782,18 +1995,14 @@
       const tStr = getTodayStr();
 
       // Determine which children need check-in for this meal
+      // In edit mode, include children who already have servings
       const childrenToCheck = useMemo(() => {
         return (kids || []).filter(child => {
           const cPlans = childPlans(plans, child.id);
-          const cServings = childServings(servings, child.id);
           const plan = cPlans.find(p => p.date === tStr && p.meal === meal);
-          if (!plan || plan.foodIds.length === 0) return false;
-          const hasServings = plan.foodIds.some(fid =>
-            cServings.some(s => s.foodId === fid && s.date === tStr && s.meal === meal)
-          );
-          return !hasServings;
+          return plan && plan.foodIds.length > 0;
         });
-      }, [kids, plans, servings, tStr, meal]);
+      }, [kids, plans, tStr, meal]);
 
       // If only one child or independent meals, use single-child mode
       const multiMode = childrenToCheck.length > 1;
@@ -1811,7 +2020,18 @@
       const allFoods = allFoodIds.map(id => foods.find(f => f.id === id)).filter(Boolean);
 
       // Track selections: { `${childId}-${foodId}`: eaten }
-      const [selections, setSelections] = useState({});
+      // Pre-populate from existing servings (enables editing after check-in)
+      const [selections, setSelections] = useState(() => {
+        const initial = {};
+        childrenToCheck.forEach(child => {
+          const plan = plans.find(p => p.date === tStr && p.meal === meal && p.childId === child.id);
+          (plan?.foodIds || []).forEach(fid => {
+            const existing = servings.find(s => s.foodId === fid && s.date === tStr && s.meal === meal && s.childId === child.id);
+            if (existing) initial[`${child.id}-${fid}`] = existing.eaten;
+          });
+        });
+        return initial;
+      });
 
       // Count how many entries we need total
       const totalNeeded = useMemo(() => {
@@ -1948,6 +2168,7 @@
     function DiscoveryModal({ dispatch, onClose, activeChildId, children: kids, settings }) {
       const [name, setName] = useState('');
       const [eaten, setEaten] = useState(null);
+      const [selectedMeal, setSelectedMeal] = useState('dinner');
       // Track which children tried this discovery — default all if sameMealDefault
       const [selectedKids, setSelectedKids] = useState(
         settings?.sameMealDefault && kids.length > 1 ? kids.map(c => c.id) : [activeChildId]
@@ -1959,7 +2180,7 @@
 
       const handleSave = () => {
         if (!name.trim()) return;
-        dispatch({ type: 'DISCOVER_FOOD', name, eaten, childIds: selectedKids });
+        dispatch({ type: 'DISCOVER_FOOD', name, eaten, childIds: selectedKids, meal: selectedMeal });
         onClose();
       };
 
@@ -1993,6 +2214,23 @@
                 </div>
               )}
 
+              {/* Which meal? */}
+              <div>
+                <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">Which meal?</p>
+                <div className="flex gap-2">
+                  {MEALS.map(m => (
+                    <button key={m} onClick={() => setSelectedMeal(m)}
+                      className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all active:scale-95 ${
+                        selectedMeal === m
+                          ? 'bg-brand-500 text-white shadow-sm'
+                          : 'bg-white border border-slate-200 text-neutral'
+                      }`}>
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* How much did they eat? */}
               <div>
                 <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">How much was eaten?</p>
@@ -2018,7 +2256,7 @@
 
               <button onClick={handleSave}
                 className="w-full bg-brand-500 text-white p-5 rounded-3xl font-black shadow-lg uppercase">
-                Add to dinner
+                Add to {selectedMeal}
               </button>
             </div>
           </div>
