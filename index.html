@@ -438,7 +438,7 @@
       }, []);
       return (
         <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-brand-900/60 p-4 animate-in"
-          style={kbOffset > 0 ? { paddingBottom: `${kbOffset + 16}px` } : undefined}
+          style={kbOffset > 0 ? { paddingBottom: `${Math.round(kbOffset / 2) + 16}px` } : undefined}
           onClick={(e) => e.target === e.currentTarget && onClose()}>
           <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-md max-h-[85vh] overflow-y-auto">{children}</div>
         </div>
