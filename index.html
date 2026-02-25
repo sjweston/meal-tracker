@@ -1326,15 +1326,9 @@
       const [confirmRemove, setConfirmRemove] = useState(null);
       const [joinCode, setJoinCode] = useState('');
 
-      const handleSignIn = async () => {
+      const handleSignIn = () => {
         const provider = new firebase.auth.GoogleAuthProvider();
-        try {
-          await firebase.auth().signInWithPopup(provider);
-        } catch (err) {
-          if (err.code === 'auth/popup-blocked') {
-            await firebase.auth().signInWithRedirect(provider);
-          }
-        }
+        firebase.auth().signInWithRedirect(provider);
       };
 
       const handleDisconnect = () => {
