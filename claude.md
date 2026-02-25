@@ -1,8 +1,71 @@
-new features to add:
+# Meal Tracker
 
+## Project Goal
 
-A quick daily check-in. After dinner, a simple "How'd it go?" screen where you tap through each food from today's meals and rate them. Right now rating happens in the pantry or by tapping into a meal cell — a dedicated end-of-day flow would make it feel fast and routine, almost like a game.
+A Progressive Web App for parents managing picky eating in children. Built on the research-backed "15-try rule" — that children need roughly 15 exposures to a food before accepting it — the app tracks meal plans, eating history, and food preferences to help parents stay consistent and see progress over time.
 
-Some personality. A streak counter for balanced meals, a "new foods tried this month" stat, maybe a simple progress visualization. Parents love seeing that they're doing a good job. Even something as small as "14-day streak of balanced lunches" is weirdly motivating.
+The app is designed to be fast, thumb-friendly, and work offline. It runs entirely in the browser with IndexedDB for persistence, no backend required.
 
-Bottom tab bar instead of top tabs. Standard iOS convention, easier to reach with one thumb, and it gives you room for more sections (Pantry, Today, Week, Shopping List) without crowding the header.
+## Tech Stack
+
+- **Framework:** React 18 (functional components, hooks, useReducer)
+- **Structure:** Single-file PWA (`index.html`, ~2,300 lines)
+- **Styling:** Tailwind CSS
+- **Icons:** Phosphor Icons
+- **Storage:** IndexedDB (foods, plans, servings, combos, children, settings, memory)
+- **Offline:** Service Worker with cache-first strategy
+- **Hosting:** GitHub Pages at `/meal-tracker/`
+
+## Current Features
+
+### Core Data Model
+- **Foods** are household-shared with name, categories (carb/protein/fruit/veggie/snack), stock level, and optional notes
+- **Meal Plans** are per-child, per-date, per-meal (breakfast/lunch/dinner/snack)
+- **Servings** record per-child eating outcomes (none/some/all) — preferences are computed dynamically from serving history, not stored as static ratings
+- **Combos** are reusable meal templates (e.g. "The Usual") that can be applied with one tap
+- **Children** have name, emoji avatar, and display order
+
+### Screens
+- **Today:** Daily dashboard with meal check-ins, exposure progress (foods approaching 15 tries), accepted foods count, planning nudges, and shopping urgency alerts
+- **Pantry:** Active inventory filtered to in-stock and low-stock items
+- **Library:** Master database of all foods ever added, with batch operations (merge, bulk categorize, multi-delete)
+- **Planner:** Daily and weekly views with per-child meal planning, combo support, and a category coverage heatmap
+- **Shopping:** Auto-generated list grouped by aisle (produce, meat/dairy, pantry, snacks) with dismiss and copy-to-AnyList support
+- **Family:** Child management, settings, data export/import
+
+### Key Interactions
+- **Meal Check-In:** After a meal, tap through each food and log whether the child ate none/some/all. Multi-child mode shows per-child toggles
+- **Quick Sort:** Card-stack interface to rapidly categorize uncategorized foods
+- **Food Discovery:** Log a new food tried at a restaurant with one action (creates food + plan + serving)
+- **Preference Badges:** Each food shows per-child preference icons (loves/likes/meh/dislikes) computed from the last 6 months of servings
+
+### Multi-Child Support
+- Full per-child data for plans, servings, and preferences
+- Shared household data for foods, combos, and shopping
+- "Same meal" toggle to plan one meal for all children at once (independently editable per child)
+- Auto-migration from single-child to multi-child data format
+
+### Balance & Streaks
+- A "balanced day" requires at least one carb, protein, fruit, and veggie across all meals
+- Balanced meal streak counter on the Today screen
+- Exposure tracking toward the 15-try acceptance threshold
+
+## Architecture Notes
+
+- All state managed through a single `useReducer` with ~20 action types
+- Expensive computations (exposures, streaks, stats) wrapped in `useMemo`
+- Two-tier migration system runs on app start: rating-to-serving migration and single-to-multi-child migration
+- Service worker versioned at `meal-tracker-v17.8`, pre-caches app shell and CDN resources
+- Date handling uses `toLocaleDateString('en-CA')` to avoid UTC timezone displacement
+
+## Planned Features
+
+- **Dedicated daily check-in flow:** A fast end-of-day "How'd it go?" screen to rate each food from today's meals, designed to feel routine and game-like
+- **More personality and motivation:** Streak counters, "new foods tried this month" stats, progress visualizations
+- **Stock check during meal check-in:** When logging how much the children ate, also prompt about remaining stock for each food (e.g. "running low?" / "out?"). Keeps the pantry accurate without a separate step.
+- **Two-parent data sync:** A free mechanism for two parents to share the same household data across phones. Needs to be zero-cost — possible approaches include a shared cloud document (e.g. JSON in Google Drive/iCloud), peer-to-peer sync via WebRTC, or a lightweight free-tier service like Firebase Realtime Database or Supabase. Requires further research.
+- **UI polish:** Continued refinement of the bottom tab bar and mobile-first interactions
+
+## Decision Log
+
+_Keep this section updated with notable decisions and their rationale._
