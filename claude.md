@@ -63,48 +63,25 @@ The app is designed to be fast, thumb-friendly, and work offline. It runs entire
 - **Dedicated daily check-in flow:** A fast end-of-day "How'd it go?" screen to rate each food from today's meals, designed to feel routine and game-like
 - **More personality and motivation:** Streak counters, "new foods tried this month" stats, progress visualizations
 - **Stock check during meal check-in:** When logging how much the children ate, also prompt about remaining stock for each food (e.g. "running low?" / "out?"). Keeps the pantry accurate without a separate step.
-- **Two-parent data sync:** A free mechanism for two parents to share the same household data across phones. Needs to be zero-cost — possible approaches include a shared cloud document (e.g. JSON in Google Drive/iCloud), peer-to-peer sync via WebRTC, or a lightweight free-tier service like Firebase Realtime Database or Supabase. Requires further research.
+- **Two-parent data sync:** Firebase was attempted and abandoned (see Decision Log). Next approach: clipboard-based copy/paste sync via iMessage/text — no services, no auth, no keys. One parent taps "Copy to share", sends via text, other parent taps "Paste to sync". Requires smart merge logic so neither parent's data is fully overwritten.
 - **UI polish:** Continued refinement of the bottom tab bar and mobile-first interactions
 
 ## Decision Log
 
-### Two-parent data sync — chose Firebase Realtime Database (2025-02-24)
+### Two-parent data sync — Firebase attempted and abandoned (2026-02-24)
 
-**Options evaluated:**
-1. **Shared JSON file (Google Drive/iCloud)** — Simple concept, but PWAs can't auto-read from cloud folders. Would require a manual file picker tap each sync, adding friction. iCloud has no web API at all.
-2. **Free paste endpoint (jsonbin.io / Cloudflare Worker)** — Simpler to build, no OAuth, but requires a manual "Push" / "Pull" tap per sync. Not ideal for a daily-habit app.
-3. **Firebase Realtime Database** — More setup upfront, but real-time auto-sync after initial pairing. Free Spark plan is more than sufficient (1GB storage, 10GB/month transfer). Best long-term UX.
+**Firebase was chosen initially** for automatic real-time sync, but the Google OAuth setup proved too brittle for a PWA hosted on a custom domain. Issues encountered:
+- Google Sign-In popup blocked on mobile Safari/iOS PWA mode
+- `signInWithRedirect` attempted but still returned "requested action is invalid"
+- Root cause unclear — likely OAuth consent screen or authorized domains misconfiguration that resisted multiple fix attempts
 
-**Decision:** Firebase. The automatic sync is worth the setup cost for an app meant to be used daily by two parents.
+**Firebase code was fully removed** from `index.html` (SDK scripts, init block, sync helpers, sync effects, FamilySettingsView UI). The app is back to its pre-Firebase state.
 
-**Firebase concern — API keys in public repo:** Firebase web config keys are designed to be public (client-side identifiers, not secrets). Security comes from Firebase Security Rules (server-side) and API key domain restrictions (Google Cloud Console). Google's automated repo scanning sends warning emails, but this is a false alarm when the key is properly restricted. Domain-restrict the key to the GitHub Pages URL.
+**Next approach: clipboard-based sync**
+- One parent taps "Copy to share" → compact JSON lands on clipboard
+- Parent sends it via iMessage/text (their existing communication channel)
+- Other parent taps "Paste to sync" → app merges the incoming data
+- No services, no auth, no keys, no setup — works forever
+- Requires a smart merge strategy so neither parent's changes are fully overwritten
 
-**Setup status (in progress):**
-- [x] Firebase project created: `cd-meal-tracker`
-- [x] Web app registered
-- [x] Realtime Database created (`https://cd-meal-tracker-default-rtdb.firebaseio.com`)
-- [ ] Security rules published
-- [ ] Google Sign-In enabled in Authentication
-- [ ] API key restricted to GitHub Pages domain
-- [ ] Code integration into `index.html`
-
-**Firebase config (already generated):**
-```javascript
-const firebaseConfig = {
-  apiKey: "AIzaSyCWPs2eVMJSCzG3f0YLMjL_PCT7ozYnCjM",
-  authDomain: "cd-meal-tracker.firebaseapp.com",
-  databaseURL: "https://cd-meal-tracker-default-rtdb.firebaseio.com",
-  projectId: "cd-meal-tracker",
-  storageBucket: "cd-meal-tracker.firebasestorage.app",
-  messagingSenderId: "263676843677",
-  appId: "1:263676843677:web:caba9df37c4ff11c67e674",
-  measurementId: "G-LKC3LDHSXV"
-};
-```
-
-**Next steps for code integration:**
-- Add Firebase SDK CDN imports (firebase-app, firebase-auth, firebase-database)
-- Build auth flow: Google Sign-In button in Family/Settings
-- Build household pairing: create household → share code → join household
-- Build sync logic: on state change write to Firebase, on app open read and merge
-- Conflict resolution: per-record timestamp merge (newer version of each food/plan/serving wins)
+**Firebase project still exists** (`cd-meal-tracker`) and could be revisited, but the setup overhead is not justified for a personal family app.

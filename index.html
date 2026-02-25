@@ -18,10 +18,6 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://unpkg.com/@phosphor-icons/web"></script>
-  <!-- Firebase compat SDK for household data sync -->
-  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
 
   <script>
     tailwind.config = {
@@ -45,19 +41,6 @@
 </head>
 <body class="text-slate-800 tracking-tight">
   <div id="root"></div>
-
-  <script>
-    // Firebase initialization — must run before the Babel block
-    firebase.initializeApp({
-      apiKey: "AIzaSyCWPs2eVMJSCzG3f0YLMjL_PCT7ozYnCjM",
-      authDomain: "cd-meal-tracker.firebaseapp.com",
-      databaseURL: "https://cd-meal-tracker-default-rtdb.firebaseio.com",
-      projectId: "cd-meal-tracker",
-      storageBucket: "cd-meal-tracker.firebasestorage.app",
-      messagingSenderId: "263676843677",
-      appId: "1:263676843677:web:caba9df37c4ff11c67e674",
-    });
-  </script>
 
   <script type="text/babel">
     const { useState, useEffect, useReducer, useCallback, useMemo, useRef } = React;
@@ -88,26 +71,6 @@
     // --- Constants ---
     const generateId = () => Math.random().toString(36).substring(2, 15);
     const getTodayStr = () => new Date().toLocaleDateString('en-CA');
-
-    // Generates a readable 8-char household code (no ambiguous chars like 0/O, I/1)
-    const generateHouseholdCode = () => {
-      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-      return Array.from({ length: 8 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-    };
-
-    // Builds the full data payload to push to Firebase
-    const buildSyncPayload = (state) => ({
-      version: 4,
-      lastModified: Date.now(),
-      foods: state.foods,
-      plans: state.plans,
-      combos: state.combos,
-      foodMemory: state.foodMemory,
-      shoppingDismissed: state.shoppingDismissed,
-      servings: state.servings,
-      children: state.children,
-      settings: state.settings,
-    });
 
     const CATEGORIES = [
       { id: 'carb', label: 'Carb', color: 'bg-amber-100 text-amber-800 border-amber-300', aisle: 'Pantry' },
@@ -1173,13 +1136,6 @@
       const [lSelect, setLSelect] = useState([]);
       const [quickSort, setQuickSort] = useState(false);
 
-      // Sync state — managed outside the main reducer so it never gets overwritten by IMPORT_DATA
-      const [syncUser, setSyncUser] = useState(null);       // Firebase Auth user
-      const [syncConfig, setSyncConfig] = useState(null);   // { householdId } — stored in IDB, not synced
-      const [syncStatus, setSyncStatus] = useState('idle'); // 'idle' | 'syncing' | 'synced' | 'error'
-      const [lastSynced, setLastSynced] = useState(null);
-      const lastPushed = useRef(0);   // timestamp of the last payload we pushed to Firebase
-      const syncLock = useRef(false); // true briefly after receiving remote data, to prevent echo-back
 
       // Track the active child locally (synced to settings)
       const activeChildId = state.settings?.activeChildId || state.children?.[0]?.id || null;
@@ -1195,8 +1151,6 @@
           let servings = await dbLoad('servings', []);
           let children = await dbLoad('children', []);
           let settings = await dbLoad('settings', { sameMealDefault: true, activeChildId: null });
-          const syncCfg = await dbLoad('syncConfig', null);
-          if (syncCfg) setSyncConfig(syncCfg);
 
           // --- Migration: convert old manual .rating fields to serving records ---
           const hasOldRatings = foods.some(f => f.rating);
@@ -1238,49 +1192,6 @@
         dbSave('settings', state.settings);
       }, [state]);
 
-      // Persist sync config to IDB when it changes (separate from main state — never synced to Firebase)
-      useEffect(() => {
-        if (syncConfig !== null) dbSave('syncConfig', syncConfig);
-      }, [syncConfig]);
-
-      // Auth: watch Firebase sign-in state; handle redirect result for mobile
-      useEffect(() => {
-        firebase.auth().getRedirectResult().catch(() => {});
-        const unsub = firebase.auth().onAuthStateChanged(user => setSyncUser(user));
-        return unsub;
-      }, []);
-
-      // Incoming sync: listen to Firebase for changes pushed by the other parent
-      useEffect(() => {
-        if (!syncUser || !syncConfig?.householdId || !state.isLoaded) return;
-        const ref = firebase.database().ref(`households/${syncConfig.householdId}/data`);
-        const listener = ref.on('value', snapshot => {
-          const remote = snapshot.val();
-          if (!remote || remote.lastModified <= lastPushed.current) return;
-          // Newer data from the other parent — import it
-          syncLock.current = true;
-          lastPushed.current = remote.lastModified;
-          dispatch({ type: 'IMPORT_DATA', payload: remote });
-          setTimeout(() => { syncLock.current = false; }, 3000);
-        });
-        return () => ref.off('value', listener);
-      }, [syncUser, syncConfig, state.isLoaded]);
-
-      // Outgoing sync: push local state to Firebase 2s after any change (debounced)
-      useEffect(() => {
-        if (!syncUser || !syncConfig?.householdId || !state.isLoaded) return;
-        const timer = setTimeout(() => {
-          if (syncLock.current) return; // Skip — we just received this data, no need to echo it back
-          const payload = buildSyncPayload(state);
-          lastPushed.current = payload.lastModified;
-          setSyncStatus('syncing');
-          firebase.database().ref(`households/${syncConfig.householdId}/data`).set(payload)
-            .then(() => { setSyncStatus('synced'); setLastSynced(new Date()); })
-            .catch(() => setSyncStatus('error'));
-        }, 2000);
-        return () => clearTimeout(timer);
-      }, [state, syncUser, syncConfig]);
-
       if (!state.isLoaded) return <div className="flex h-screen items-center justify-center text-brand-500 font-black animate-pulse uppercase">Loading</div>;
 
       const NAV = [ {id:'today', i:'ph-house'}, {id:'pantry', i:'ph-package'}, {id:'library', i:'ph-books'}, {id:'planner', i:'ph-calendar-blank'}, {id:'shopping', i:'ph-shopping-cart'} ];
@@ -1301,7 +1212,7 @@
             {tab === 'library' && <ListView foods={state.foods} plans={state.plans} servings={state.servings} title="Library" selectionIds={lSelect} setSelectionIds={setLSelect} onEdit={setEdit} dispatch={dispatch} allFoods={state.foods} children={state.children} activeChildId={activeChildId} />}
             {tab === 'planner' && <MealPlannerView foods={state.foods} plans={state.plans} combos={state.combos} servings={state.servings} dispatch={dispatch} activeChildId={activeChildId} children={state.children} settings={state.settings} />}
             {tab === 'shopping' && <ShoppingListView foods={state.foods} plans={state.plans} servings={state.servings} dismissed={state.shoppingDismissed} dispatch={dispatch} children={state.children} />}
-            {tab === 'family' && <FamilySettingsView children={state.children} settings={state.settings} dispatch={dispatch} activeChildId={activeChildId} setActiveChildId={setActiveChildId} syncUser={syncUser} syncConfig={syncConfig} setSyncConfig={setSyncConfig} syncStatus={syncStatus} lastSynced={lastSynced} />}
+            {tab === 'family' && <FamilySettingsView children={state.children} settings={state.settings} dispatch={dispatch} activeChildId={activeChildId} setActiveChildId={setActiveChildId} />}
           </main>
           <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t flex justify-around p-3 pb-8 z-50">
             {NAV.map(t => (<button key={t.id} onClick={() => setTab(t.id)} className={`flex flex-col items-center gap-1 transition-all ${tab === t.id ? 'scale-110 text-brand-500' : 'opacity-40 grayscale'}`}><i className={`${tab === t.id ? t.i + '-fill' : t.i} text-2xl`}></i><span className="text-[9px] font-black uppercase tracking-widest">{t.id}</span></button>))}
@@ -1321,32 +1232,9 @@
     // ==========================================================================
 
     // FamilySettingsView: Manage children and family settings
-    function FamilySettingsView({ children: kids, settings, dispatch, activeChildId, setActiveChildId, syncUser, syncConfig, setSyncConfig, syncStatus, lastSynced }) {
+    function FamilySettingsView({ children: kids, settings, dispatch, activeChildId, setActiveChildId }) {
       const [editChild, setEditChild] = useState(null); // child object being edited, or 'new'
       const [confirmRemove, setConfirmRemove] = useState(null);
-      const [joinCode, setJoinCode] = useState('');
-
-      const handleSignIn = () => {
-        const provider = new firebase.auth.GoogleAuthProvider();
-        firebase.auth().signInWithRedirect(provider);
-      };
-
-      const handleDisconnect = () => {
-        firebase.auth().signOut();
-        setSyncConfig(null);
-        setJoinCode('');
-      };
-
-      const handleCreateHousehold = () => {
-        setSyncConfig({ householdId: generateHouseholdCode() });
-      };
-
-      const handleJoinHousehold = () => {
-        const code = joinCode.trim().toUpperCase();
-        if (code.length < 6) return;
-        setSyncConfig({ householdId: code });
-        setJoinCode('');
-      };
 
       return (
         <div className="animate-in pb-24">
@@ -1415,71 +1303,6 @@
                 <div className={`w-5 h-5 bg-white rounded-full shadow transition-all ${settings?.sameMealDefault ? 'translate-x-5' : ''}`} />
               </div>
             </button>
-          </div>
-
-          {/* Sync */}
-          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 mb-6">
-            <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-4">Household Sync</p>
-
-            {!syncUser ? (
-              /* Not signed in */
-              <div>
-                <p className="font-bold text-brand-900 text-sm mb-1">Share data with another parent</p>
-                <p className="text-xs text-neutral font-bold mb-4">Sign in with Google to create or join a shared household. Data syncs automatically in real time.</p>
-                <button onClick={handleSignIn}
-                  className="w-full py-4 bg-brand-500 text-white rounded-2xl font-black uppercase text-sm flex items-center justify-center gap-2 active:scale-95">
-                  <i className="ph ph-google-logo text-lg"></i> Sign in with Google
-                </button>
-              </div>
-
-            ) : !syncConfig?.householdId ? (
-              /* Signed in, no household yet */
-              <div>
-                <p className="text-xs text-neutral font-bold mb-4">Signed in as <span className="text-brand-900">{syncUser.email}</span></p>
-                <button onClick={handleCreateHousehold}
-                  className="w-full py-4 bg-brand-500 text-white rounded-2xl font-black uppercase text-sm flex items-center justify-center gap-2 active:scale-95 mb-4">
-                  <i className="ph ph-house-line text-lg"></i> Create Household
-                </button>
-                <p className="text-[10px] font-black uppercase text-neutral text-center mb-3">— or join an existing one —</p>
-                <div className="flex gap-2">
-                  <input
-                    value={joinCode}
-                    onChange={e => setJoinCode(e.target.value.toUpperCase())}
-                    placeholder="Enter code..."
-                    maxLength={8}
-                    className="flex-1 p-4 bg-brand-50 rounded-2xl outline-none font-black text-brand-900 tracking-widest uppercase text-sm"
-                  />
-                  <button onClick={handleJoinHousehold} disabled={joinCode.trim().length < 6}
-                    className={`px-5 rounded-2xl font-black uppercase text-sm transition-all ${joinCode.trim().length >= 6 ? 'bg-brand-500 text-white active:scale-95' : 'bg-slate-200 text-slate-400'}`}>
-                    Join
-                  </button>
-                </div>
-              </div>
-
-            ) : (
-              /* Signed in + household connected */
-              <div>
-                <div className="flex items-center gap-3 mb-4">
-                  <i className={`ph-fill ph-wifi-high text-2xl ${syncStatus === 'error' ? 'text-accent' : syncStatus === 'syncing' ? 'text-amber-500' : 'text-brand-500'}`}></i>
-                  <div>
-                    <p className="font-black text-brand-900 text-sm">
-                      {syncStatus === 'syncing' ? 'Syncing...' : syncStatus === 'synced' ? 'Synced' : syncStatus === 'error' ? 'Sync error — check connection' : 'Connected'}
-                    </p>
-                    {lastSynced && <p className="text-[10px] text-neutral font-bold">Last synced {lastSynced.toLocaleTimeString()}</p>}
-                  </div>
-                </div>
-                <div className="bg-brand-50 rounded-2xl p-4 mb-3">
-                  <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-1">Household Code</p>
-                  <p className="font-black text-brand-900 tracking-widest text-xl mb-1">{syncConfig.householdId}</p>
-                  <p className="text-[10px] text-neutral font-bold">Share this code with the other parent to connect their phone</p>
-                </div>
-                <p className="text-[10px] text-neutral font-bold mb-4">{syncUser.email}</p>
-                <button onClick={handleDisconnect}
-                  className="w-full py-3 border-2 border-slate-200 rounded-2xl font-black uppercase text-[10px] text-neutral active:scale-95">
-                  Disconnect
-                </button>
-              </div>
-            )}
           </div>
 
           {/* Child form modal */}
