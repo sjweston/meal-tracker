@@ -62,8 +62,6 @@ The app is designed to be fast, thumb-friendly, and work offline. It runs entire
 
 - **Dedicated daily check-in flow:** A fast end-of-day "How'd it go?" screen to rate each food from today's meals, designed to feel routine and game-like
 - **More personality and motivation:** Streak counters, "new foods tried this month" stats, progress visualizations
-- **Dedicated daily check-in flow:** A fast end-of-day "How'd it go?" screen to rate each food from today's meals, designed to feel routine and game-like
-- **More personality and motivation:** Streak counters, "new foods tried this month" stats, progress visualizations
 - **UI polish:** Continued refinement of the bottom tab bar and mobile-first interactions
 
 ## Decision Log
@@ -84,10 +82,12 @@ The app is designed to be fast, thumb-friendly, and work offline. It runs entire
 **Chosen approach: Cloudflare Workers + KV** — a tiny edge Worker acts as a shared key-value store. No OAuth, no popups, no accounts beyond a free Cloudflare login.
 
 **How it works:**
-- Both parents enter the same Worker URL + a shared family code (e.g. `SMITH42`) in Family settings once
+- Worker URL is hardcoded as `SYNC_WORKER_URL` constant at the top of `index.html`; deployed at `https://meal-tracker-sync.weston-sara.workers.dev`
+- Both parents enter the same family code (e.g. `SMITH42`) in Family → Sync settings — that's the only setup required
 - Tapping "Sync Now" fetches the remote snapshot, merges it with local data, writes the merged result back, and updates local state
 - No auth required at runtime — just a fetch to a public endpoint keyed by the family code
 - Entirely within Cloudflare's free tier (100k requests/day, 1k writes/day, 1GB storage)
+- Multiple families can share the same Worker using different codes
 
 **Merge strategy (union with local-wins):**
 - Foods, combos, children: union by `id`, local wins on conflict
@@ -106,4 +106,4 @@ Added Low/Out stock toggle buttons below each food card in `MealCheckInModal`. D
 
 ### Past-day meal editing (2026-02-28)
 
-`MealCheckInModal` now accepts a `date` prop instead of hardcoding today. `TodayView` shows "Yesterday" and "2 days ago" sections (only if plans exist for those days) with meal pills that open the check-in modal for the correct date. Checked/unchecked state shown via filled/empty circle icons.
+`MealCheckInModal` now accepts a `date` prop instead of hardcoding today. Past-day editing lives in the **Planner** tab: navigate to a prior date with the `‹ ›` arrows, then tap any meal card that has foods planned — it opens the check-in modal instead of the food picker. A ✓ or ○ indicator on each meal card shows whether servings have been logged for that day. Today and future dates still open the food picker as normal.
