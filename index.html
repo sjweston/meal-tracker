@@ -106,6 +106,10 @@
     const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
     const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+    // Cloudflare sync Worker URL — set this after running `wrangler deploy`.
+    // Both parents use the same URL; only the family code differs per family.
+    const SYNC_WORKER_URL = 'https://meal-tracker-sync.YOUR_SUBDOMAIN.workers.dev';
+
     // Emoji options for child avatars — quick visual ID in the UI
     const CHILD_EMOJIS = ['🦊', '🐸', '🐻', '🐰', '🦁', '🐱', '🐶', '🦄', '🐼', '🐨', '🦋', '🌟'];
 
@@ -623,6 +627,12 @@
           body: 'Add children in the Family tab. Plan the same meal for everyone, then make per-kid tweaks. Each child gets their own preference profile.',
           color: 'text-brand-900',
         },
+        {
+          icon: 'ph-fill ph-arrows-clockwise',
+          title: 'Sync Between Parents',
+          body: 'Go to the Family tab and enter a shared family code under Family Sync — both parents use the same code. Tap "Sync Now" any time to merge your data. Foods, meals, and eating history all combine automatically.',
+          color: 'text-brand-900',
+        },
       ];
       const s = steps[step];
       const isLast = step === steps.length - 1;
@@ -756,31 +766,6 @@
         });
       }, [myPlans, tomorrowStr]);
 
-      // Past days: yesterday and 2 days ago
-      const pastDayStrs = useMemo(() => {
-        return [1, 2].map(n => {
-          const d = new Date(); d.setDate(d.getDate() - n);
-          return d.toLocaleDateString('en-CA');
-        });
-      }, []);
-
-      const pastDays = useMemo(() => {
-        return pastDayStrs.map(date => {
-          const meals = MEALS.filter(meal =>
-            (kids || []).some(child => {
-              const plan = plans.find(p => p.date === date && p.meal === meal && p.childId === child.id);
-              return plan && plan.foodIds.length > 0;
-            })
-          );
-          return { date, meals };
-        }).filter(d => d.meals.length > 0);
-      }, [pastDayStrs, plans, kids]);
-
-      const mealHasServings = (date, meal) =>
-        (kids || []).some(child =>
-          childServings(servings, child.id).some(s => s.date === date && s.meal === meal)
-        );
-
       return (
         <div className="animate-in pb-24">
           {/* Header bar with action buttons */}
@@ -837,28 +822,6 @@
               ))}
             </div>
           )}
-
-          {/* ---- Past days (yesterday, 2 days ago) ---- */}
-          {pastDays.map(({ date, meals }) => (
-            <div key={date} className="mb-4">
-              <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">
-                {date === pastDayStrs[0] ? 'Yesterday' : '2 days ago'}
-              </p>
-              <div className="flex gap-2 overflow-x-auto no-scrollbar">
-                {meals.map(meal => {
-                  const logged = mealHasServings(date, meal);
-                  return (
-                    <button key={meal} onClick={() => setCheckIn({ meal, date })}
-                      className="flex items-center gap-2 px-4 py-3 bg-white border border-slate-200 rounded-2xl active:scale-95 transition-all whitespace-nowrap">
-                      <i className={logged ? 'ph-fill ph-check-circle text-brand-500' : 'ph ph-circle text-slate-300'}></i>
-                      <span className="text-sm font-bold text-brand-700 capitalize">{meal}</span>
-                      <i className="ph ph-pencil-simple text-neutral text-xs"></i>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
 
           {/* ---- SECTION 2: Planning nudge (tomorrow's gaps) ---- */}
           {unplannedTomorrow.length > 0 && (
@@ -963,6 +926,7 @@
       const [viewMode, setViewMode] = useState('daily');
       const [date, setDate] = useState(getTodayStr());
       const [picker, setPicker] = useState(null);
+      const [checkIn, setCheckIn] = useState(null); // { meal, date } for past-day editing
       const shift = (o) => { let d = new Date(date + 'T00:00:00'); d.setDate(d.getDate() + o); setDate(d.toLocaleDateString('en-CA')); };
       const weekDates = Array.from({length: 7}, (_, i) => { const d = new Date(date + 'T00:00:00'); const day = d.getDay(); const diff = d.getDate() - day + (day === 0 ? -6 : 1) + i; d.setDate(diff); return d.toLocaleDateString('en-CA'); });
 
@@ -995,9 +959,17 @@
               const pf = p?.foodIds.map(id => foods.find(f => f.id === id)).filter(Boolean) || [];
               const cov = new Set(pf.flatMap(f => f.categories || []));
               const diffs = getChildDiffs(date, m);
-              return (<div key={m} onClick={() => setPicker({date, meal:m})} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-transparent active:scale-[0.98] transition-all">
+              const isPast = date < getTodayStr();
+              const hasServings = isPast && pf.length > 0 && myServings.some(s => s.date === date && s.meal === m);
+              const handleMealTap = () => isPast && pf.length > 0 ? setCheckIn({ meal: m, date }) : setPicker({ date, meal: m });
+              return (<div key={m} onClick={handleMealTap} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-transparent active:scale-[0.98] transition-all">
                 <div className="flex justify-between items-center mb-4">
-                  <h3 className="font-black text-xl capitalize text-brand-900">{m}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-black text-xl capitalize text-brand-900">{m}</h3>
+                    {isPast && pf.length > 0 && (
+                      <i className={`text-base ${hasServings ? 'ph-fill ph-check-circle text-brand-500' : 'ph ph-circle text-slate-300'}`}></i>
+                    )}
+                  </div>
                   <div className="flex gap-1">{BALANCE_CATEGORIES.map(c => (<span key={c} className={`text-[8px] px-1.5 py-0.5 rounded font-black ${cov.has(c) ? 'bg-brand-500 text-white' : 'bg-slate-100 text-slate-300'}`}>{c[0].toUpperCase()}</span>))}</div>
                 </div>
                 {pf.length ? <div className="space-y-2">
@@ -1033,6 +1005,7 @@
             </div></div></div>
           )}
           {picker && <FoodPickerModal date={picker.date} meal={picker.meal} foods={foods} combos={combos} servings={servings} current={myPlans.find(p => p.date === picker.date && p.meal === picker.meal)?.foodIds || []} dispatch={dispatch} onClose={() => setPicker(null)} activeChildId={activeChildId} children={kids} settings={settings} />}
+          {checkIn && <MealCheckInModal meal={checkIn.meal} date={checkIn.date} plans={plans} foods={foods} servings={servings} dispatch={dispatch} onClose={() => setCheckIn(null)} activeChildId={activeChildId} children={kids} settings={settings} />}
         </div>
       );
     }
@@ -1360,12 +1333,11 @@
       const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | success | error
 
       const handleSync = async () => {
-        const workerUrl = (settings?.workerUrl || '').replace(/\/$/, '');
         const familyCode = (settings?.familyCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-        if (!workerUrl || !familyCode) return;
+        if (!familyCode) return;
         setSyncStatus('syncing');
         try {
-          const endpoint = `${workerUrl}/${familyCode}`;
+          const endpoint = `${SYNC_WORKER_URL.replace(/\/$/, '')}/${familyCode}`;
 
           // 1. Fetch whatever the other parent last pushed
           const res = await fetch(endpoint);
@@ -1471,33 +1443,24 @@
           {/* Sync */}
           <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 mb-6">
             <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-1">Family Sync</p>
-            <p className="text-[10px] text-neutral font-bold mb-4 opacity-60">Share data between two parents via Cloudflare</p>
-            <div className="space-y-3 mb-4">
-              <div>
-                <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-1">Worker URL</p>
-                <input type="url"
-                  value={settings?.workerUrl || ''}
-                  onChange={e => dispatch({ type: 'UPDATE_SETTINGS', updates: { workerUrl: e.target.value.trim() } })}
-                  placeholder="https://meal-tracker-sync.you.workers.dev"
-                  className="w-full p-3 bg-brand-50 rounded-xl text-xs font-mono outline-none text-brand-900" />
-              </div>
-              <div>
-                <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-1">Family Code</p>
-                <input type="text"
-                  value={settings?.familyCode || ''}
-                  onChange={e => dispatch({ type: 'UPDATE_SETTINGS', updates: { familyCode: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '') } })}
-                  placeholder="e.g. SMITH42"
-                  maxLength={20}
-                  className="w-full p-3 bg-brand-50 rounded-xl text-sm font-mono font-black outline-none uppercase text-brand-900" />
-              </div>
+            <p className="text-[10px] text-neutral font-bold mb-4 opacity-60">Share data with your partner</p>
+            <div className="mb-4">
+              <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-1">Family Code</p>
+              <input type="text"
+                value={settings?.familyCode || ''}
+                onChange={e => dispatch({ type: 'UPDATE_SETTINGS', updates: { familyCode: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '') } })}
+                placeholder="e.g. SMITH42"
+                maxLength={20}
+                className="w-full p-3 bg-brand-50 rounded-xl text-sm font-mono font-black outline-none uppercase text-brand-900" />
+              <p className="text-[10px] text-neutral font-bold mt-1 opacity-50">Both parents enter the same code</p>
             </div>
             <button onClick={handleSync}
-              disabled={!settings?.workerUrl || !settings?.familyCode || syncStatus === 'syncing'}
+              disabled={!settings?.familyCode || syncStatus === 'syncing'}
               className={`w-full py-4 rounded-2xl font-black uppercase text-sm transition-all active:scale-95 ${
                 syncStatus === 'syncing' ? 'bg-slate-200 text-slate-400 cursor-not-allowed' :
                 syncStatus === 'success' ? 'bg-brand-500 text-white' :
                 syncStatus === 'error'   ? 'bg-accent text-white' :
-                (!settings?.workerUrl || !settings?.familyCode) ? 'bg-slate-100 text-slate-400 cursor-not-allowed' :
+                !settings?.familyCode   ? 'bg-slate-100 text-slate-400 cursor-not-allowed' :
                 'bg-brand-900 text-white'
               }`}>
               {syncStatus === 'syncing' ? 'Syncing…' :
