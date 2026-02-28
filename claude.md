@@ -31,7 +31,7 @@ The app is designed to be fast, thumb-friendly, and work offline. It runs entire
 - **Library:** Master database of all foods ever added, with batch operations (merge, bulk categorize, multi-delete)
 - **Planner:** Daily and weekly views with per-child meal planning, combo support, and a category coverage heatmap
 - **Shopping:** Auto-generated list grouped by aisle (produce, meat/dairy, pantry, snacks) with dismiss and copy-to-AnyList support
-- **Family:** Child management, settings, data export/import
+- **Family:** Child management, settings, data export/import, and Cloudflare sync
 
 ### Key Interactions
 - **Meal Check-In:** After a meal, tap through each food and log whether the child ate none/some/all. Multi-child mode shows per-child toggles
@@ -62,8 +62,8 @@ The app is designed to be fast, thumb-friendly, and work offline. It runs entire
 
 - **Dedicated daily check-in flow:** A fast end-of-day "How'd it go?" screen to rate each food from today's meals, designed to feel routine and game-like
 - **More personality and motivation:** Streak counters, "new foods tried this month" stats, progress visualizations
-- **Stock check during meal check-in:** When logging how much the children ate, also prompt about remaining stock for each food (e.g. "running low?" / "out?"). Keeps the pantry accurate without a separate step.
-- **Two-parent data sync:** Firebase was attempted and abandoned (see Decision Log). Next approach: clipboard-based copy/paste sync via iMessage/text — no services, no auth, no keys. One parent taps "Copy to share", sends via text, other parent taps "Paste to sync". Requires smart merge logic so neither parent's data is fully overwritten.
+- **Dedicated daily check-in flow:** A fast end-of-day "How'd it go?" screen to rate each food from today's meals, designed to feel routine and game-like
+- **More personality and motivation:** Streak counters, "new foods tried this month" stats, progress visualizations
 - **UI polish:** Continued refinement of the bottom tab bar and mobile-first interactions
 
 ## Decision Log
@@ -77,11 +77,33 @@ The app is designed to be fast, thumb-friendly, and work offline. It runs entire
 
 **Firebase code was fully removed** from `index.html` (SDK scripts, init block, sync helpers, sync effects, FamilySettingsView UI). The app is back to its pre-Firebase state.
 
-**Next approach: clipboard-based sync**
-- One parent taps "Copy to share" → compact JSON lands on clipboard
-- Parent sends it via iMessage/text (their existing communication channel)
-- Other parent taps "Paste to sync" → app merges the incoming data
-- No services, no auth, no keys, no setup — works forever
-- Requires a smart merge strategy so neither parent's changes are fully overwritten
-
 **Firebase project still exists** (`cd-meal-tracker`) and could be revisited, but the setup overhead is not justified for a personal family app.
+
+### Two-parent data sync — Cloudflare Workers + KV implemented (2026-02-28)
+
+**Chosen approach: Cloudflare Workers + KV** — a tiny edge Worker acts as a shared key-value store. No OAuth, no popups, no accounts beyond a free Cloudflare login.
+
+**How it works:**
+- Both parents enter the same Worker URL + a shared family code (e.g. `SMITH42`) in Family settings once
+- Tapping "Sync Now" fetches the remote snapshot, merges it with local data, writes the merged result back, and updates local state
+- No auth required at runtime — just a fetch to a public endpoint keyed by the family code
+- Entirely within Cloudflare's free tier (100k requests/day, 1k writes/day, 1GB storage)
+
+**Merge strategy (union with local-wins):**
+- Foods, combos, children: union by `id`, local wins on conflict
+- Plans: union by `(childId, date, meal)`, food IDs merged as a set
+- Servings: union by `(foodId, date, meal, childId)`, local wins on conflict
+- `foodMemory`, `shoppingDismissed`: shallow merge / union
+- `settings`: never synced — each parent keeps their own prefs (activeChildId, familyCode, etc.)
+
+**Known limitation:** No conflict detection. If both parents tap Sync at the exact same moment, the second write wins (last-writer-wins). Acceptable for a 2-person household app.
+
+**Files added:** `worker.js` (the Worker), `wrangler.toml` (deploy config). Deploy with `wrangler deploy` after creating a KV namespace and pasting its ID into `wrangler.toml`.
+
+### Stock update during meal check-in (2026-02-28)
+
+Added Low/Out stock toggle buttons below each food card in `MealCheckInModal`. Dispatches `UPDATE_FOOD` for changed foods on Save. Works in both single and multi-child modes. Pre-populates current stock state so already-low/out foods show as selected.
+
+### Past-day meal editing (2026-02-28)
+
+`MealCheckInModal` now accepts a `date` prop instead of hardcoding today. `TodayView` shows "Yesterday" and "2 days ago" sections (only if plans exist for those days) with meal pills that open the check-in modal for the correct date. Checked/unchecked state shown via filled/empty circle icons.

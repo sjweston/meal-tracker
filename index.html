@@ -152,6 +152,66 @@
     // Filter plans to only those belonging to a specific child
     const childPlans = (plans, childId) => (plans || []).filter(p => p.childId === childId);
 
+    // --- Sync merge ---
+    // Combines local state with a remote snapshot fetched from the Cloudflare Worker.
+    // Strategy: union all collections by their natural unique key; local wins on conflict
+    // (i.e. the syncing parent's most recent actions take precedence). Settings are
+    // intentionally excluded — they stay local so each parent keeps their own prefs.
+    const mergeData = (local, remote) => {
+      // Foods: union by id, local wins
+      const foodsById = {};
+      (remote.foods || []).forEach(f => { foodsById[f.id] = f; });
+      (local.foods || []).forEach(f => { foodsById[f.id] = f; });
+
+      // Plans: union by (childId, date, meal); when both exist, union their foodIds
+      const plansMap = {};
+      const planKey = p => `${p.childId}|${p.date}|${p.meal}`;
+      [...(remote.plans || []), ...(local.plans || [])].forEach(p => {
+        const k = planKey(p);
+        if (plansMap[k]) {
+          const ids = new Set([...plansMap[k].foodIds, ...p.foodIds]);
+          plansMap[k] = { ...plansMap[k], foodIds: [...ids] };
+        } else {
+          plansMap[k] = { ...p };
+        }
+      });
+
+      // Servings: union by (foodId, date, meal, childId), local wins
+      const servingsMap = {};
+      const servingKey = s => `${s.foodId}|${s.date}|${s.meal}|${s.childId}`;
+      (remote.servings || []).forEach(s => { servingsMap[servingKey(s)] = s; });
+      (local.servings || []).forEach(s => { servingsMap[servingKey(s)] = s; });
+
+      // Combos: union by id, local wins
+      const combosById = {};
+      (remote.combos || []).forEach(c => { combosById[c.id] = c; });
+      (local.combos || []).forEach(c => { combosById[c.id] = c; });
+
+      // Children: union by id, local wins
+      const childrenById = {};
+      (remote.children || []).forEach(c => { childrenById[c.id] = c; });
+      (local.children || []).forEach(c => { childrenById[c.id] = c; });
+
+      // foodMemory: shallow merge, local wins
+      const foodMemory = { ...(remote.foodMemory || {}), ...(local.foodMemory || {}) };
+
+      // shoppingDismissed: union
+      const shoppingDismissed = [...new Set([
+        ...(local.shoppingDismissed || []),
+        ...(remote.shoppingDismissed || []),
+      ])];
+
+      return {
+        foods: Object.values(foodsById),
+        plans: Object.values(plansMap),
+        servings: Object.values(servingsMap),
+        combos: Object.values(combosById),
+        children: Object.values(childrenById),
+        foodMemory,
+        shoppingDismissed,
+      };
+    };
+
     // --- Reducer ---
     const appReducer = (state, action) => {
       switch (action.type) {
@@ -365,6 +425,20 @@
           servings: action.payload.servings || [],
           children: action.payload.children || state.children,
           settings: action.payload.settings || state.settings,
+        };
+
+        // Apply a merged snapshot from the Cloudflare sync Worker.
+        // Replaces all data collections but intentionally leaves settings alone
+        // so each parent keeps their own prefs (familyCode, activeChildId, etc.).
+        case 'SYNC_DATA': return {
+          ...state,
+          foods: action.payload.foods || state.foods,
+          plans: action.payload.plans || state.plans,
+          combos: action.payload.combos || state.combos,
+          foodMemory: action.payload.foodMemory || state.foodMemory,
+          shoppingDismissed: action.payload.shoppingDismissed || state.shoppingDismissed,
+          servings: action.payload.servings || state.servings,
+          children: action.payload.children || state.children,
         };
 
         default: return state;
@@ -1259,7 +1333,7 @@
             {tab === 'library' && <ListView foods={state.foods} plans={state.plans} servings={state.servings} title="Library" selectionIds={lSelect} setSelectionIds={setLSelect} onEdit={setEdit} dispatch={dispatch} allFoods={state.foods} children={state.children} activeChildId={activeChildId} />}
             {tab === 'planner' && <MealPlannerView foods={state.foods} plans={state.plans} combos={state.combos} servings={state.servings} dispatch={dispatch} activeChildId={activeChildId} children={state.children} settings={state.settings} />}
             {tab === 'shopping' && <ShoppingListView foods={state.foods} plans={state.plans} servings={state.servings} dismissed={state.shoppingDismissed} dispatch={dispatch} children={state.children} />}
-            {tab === 'family' && <FamilySettingsView children={state.children} settings={state.settings} dispatch={dispatch} activeChildId={activeChildId} setActiveChildId={setActiveChildId} />}
+            {tab === 'family' && <FamilySettingsView state={state} settings={state.settings} dispatch={dispatch} activeChildId={activeChildId} setActiveChildId={setActiveChildId} />}
           </main>
           <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t flex justify-around p-3 pb-8 z-50">
             {NAV.map(t => (<button key={t.id} onClick={() => setTab(t.id)} className={`flex flex-col items-center gap-1 transition-all ${tab === t.id ? 'scale-110 text-brand-500' : 'opacity-40 grayscale'}`}><i className={`${tab === t.id ? t.i + '-fill' : t.i} text-2xl`}></i><span className="text-[9px] font-black uppercase tracking-widest">{t.id}</span></button>))}
@@ -1278,10 +1352,52 @@
     // COMPONENTS
     // ==========================================================================
 
-    // FamilySettingsView: Manage children and family settings
-    function FamilySettingsView({ children: kids, settings, dispatch, activeChildId, setActiveChildId }) {
+    // FamilySettingsView: Manage children, family settings, and Cloudflare sync
+    function FamilySettingsView({ state, settings, dispatch, activeChildId, setActiveChildId }) {
+      const kids = state.children;
       const [editChild, setEditChild] = useState(null); // child object being edited, or 'new'
       const [confirmRemove, setConfirmRemove] = useState(null);
+      const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | success | error
+
+      const handleSync = async () => {
+        const workerUrl = (settings?.workerUrl || '').replace(/\/$/, '');
+        const familyCode = (settings?.familyCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (!workerUrl || !familyCode) return;
+        setSyncStatus('syncing');
+        try {
+          const endpoint = `${workerUrl}/${familyCode}`;
+
+          // 1. Fetch whatever the other parent last pushed
+          const res = await fetch(endpoint);
+          if (!res.ok && res.status !== 404) throw new Error(`Server error: ${res.status}`);
+          const remote = res.ok ? await res.json() : null;
+
+          // 2. Merge remote snapshot into local state
+          const local = {
+            foods: state.foods, plans: state.plans, servings: state.servings,
+            combos: state.combos, children: state.children,
+            foodMemory: state.foodMemory, shoppingDismissed: state.shoppingDismissed,
+          };
+          const merged = remote ? mergeData(local, remote) : local;
+
+          // 3. Push the merged result back so the other parent gets it too
+          const put = await fetch(endpoint, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...merged, version: 4, syncedAt: new Date().toISOString() }),
+          });
+          if (!put.ok) throw new Error(`Write error: ${put.status}`);
+
+          // 4. Apply merged data locally
+          dispatch({ type: 'SYNC_DATA', payload: merged });
+          dispatch({ type: 'UPDATE_SETTINGS', updates: { lastSyncedAt: new Date().toISOString() } });
+          setSyncStatus('success');
+          setTimeout(() => setSyncStatus('idle'), 3000);
+        } catch (err) {
+          console.error('Sync failed:', err);
+          setSyncStatus('error');
+        }
+      };
 
       return (
         <div className="animate-in pb-24">
@@ -1350,6 +1466,50 @@
                 <div className={`w-5 h-5 bg-white rounded-full shadow transition-all ${settings?.sameMealDefault ? 'translate-x-5' : ''}`} />
               </div>
             </button>
+          </div>
+
+          {/* Sync */}
+          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 mb-6">
+            <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-1">Family Sync</p>
+            <p className="text-[10px] text-neutral font-bold mb-4 opacity-60">Share data between two parents via Cloudflare</p>
+            <div className="space-y-3 mb-4">
+              <div>
+                <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-1">Worker URL</p>
+                <input type="url"
+                  value={settings?.workerUrl || ''}
+                  onChange={e => dispatch({ type: 'UPDATE_SETTINGS', updates: { workerUrl: e.target.value.trim() } })}
+                  placeholder="https://meal-tracker-sync.you.workers.dev"
+                  className="w-full p-3 bg-brand-50 rounded-xl text-xs font-mono outline-none text-brand-900" />
+              </div>
+              <div>
+                <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-1">Family Code</p>
+                <input type="text"
+                  value={settings?.familyCode || ''}
+                  onChange={e => dispatch({ type: 'UPDATE_SETTINGS', updates: { familyCode: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '') } })}
+                  placeholder="e.g. SMITH42"
+                  maxLength={20}
+                  className="w-full p-3 bg-brand-50 rounded-xl text-sm font-mono font-black outline-none uppercase text-brand-900" />
+              </div>
+            </div>
+            <button onClick={handleSync}
+              disabled={!settings?.workerUrl || !settings?.familyCode || syncStatus === 'syncing'}
+              className={`w-full py-4 rounded-2xl font-black uppercase text-sm transition-all active:scale-95 ${
+                syncStatus === 'syncing' ? 'bg-slate-200 text-slate-400 cursor-not-allowed' :
+                syncStatus === 'success' ? 'bg-brand-500 text-white' :
+                syncStatus === 'error'   ? 'bg-accent text-white' :
+                (!settings?.workerUrl || !settings?.familyCode) ? 'bg-slate-100 text-slate-400 cursor-not-allowed' :
+                'bg-brand-900 text-white'
+              }`}>
+              {syncStatus === 'syncing' ? 'Syncing…' :
+               syncStatus === 'success' ? '✓ Synced' :
+               syncStatus === 'error'   ? 'Failed — Tap to Retry' :
+               'Sync Now'}
+            </button>
+            {settings?.lastSyncedAt && syncStatus === 'idle' && (
+              <p className="text-center text-[10px] text-neutral font-bold mt-2 opacity-60">
+                Last synced {new Date(settings.lastSyncedAt).toLocaleString()}
+              </p>
+            )}
           </div>
 
           {/* Child form modal */}
