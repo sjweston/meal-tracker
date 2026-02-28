@@ -588,7 +588,7 @@
     }
 
     function TodayView({ foods, plans, servings, state, dispatch, setQuickSort, activeChildId, children: kids }) {
-      const [checkInMeal, setCheckInMeal] = useState(null);
+      const [checkIn, setCheckIn] = useState(null); // { meal, date }
       const [restaurantMode, setRestaurantMode] = useState(false);
       const [showData, setShowData] = useState(false);
       const [showTutorial, setShowTutorial] = useState(false);
@@ -682,6 +682,31 @@
         });
       }, [myPlans, tomorrowStr]);
 
+      // Past days: yesterday and 2 days ago
+      const pastDayStrs = useMemo(() => {
+        return [1, 2].map(n => {
+          const d = new Date(); d.setDate(d.getDate() - n);
+          return d.toLocaleDateString('en-CA');
+        });
+      }, []);
+
+      const pastDays = useMemo(() => {
+        return pastDayStrs.map(date => {
+          const meals = MEALS.filter(meal =>
+            (kids || []).some(child => {
+              const plan = plans.find(p => p.date === date && p.meal === meal && p.childId === child.id);
+              return plan && plan.foodIds.length > 0;
+            })
+          );
+          return { date, meals };
+        }).filter(d => d.meals.length > 0);
+      }, [pastDayStrs, plans, kids]);
+
+      const mealHasServings = (date, meal) =>
+        (kids || []).some(child =>
+          childServings(servings, child.id).some(s => s.date === date && s.meal === meal)
+        );
+
       return (
         <div className="animate-in pb-24">
           {/* Header bar with action buttons */}
@@ -708,7 +733,7 @@
               {uncheckedMeals.map(meal => {
                 const uncheckedKids = getUncheckedChildren(meal);
                 return (
-                  <button key={meal} onClick={() => setCheckInMeal(meal)}
+                  <button key={meal} onClick={() => setCheckIn({ meal, date: tStr })}
                     className="w-full bg-brand-900 text-white p-6 rounded-[2.5rem] shadow-xl flex items-center justify-between active:scale-95 transition-all">
                     <div className="text-left">
                       <p className="text-xl font-black text-white capitalize">How was {meal}?</p>
@@ -729,7 +754,7 @@
           {checkedMeals.length > 0 && (
             <div className="flex gap-2 overflow-x-auto no-scrollbar mb-4">
               {checkedMeals.map(meal => (
-                <button key={meal} onClick={() => setCheckInMeal(meal)}
+                <button key={meal} onClick={() => setCheckIn({ meal, date: tStr })}
                   className="flex items-center gap-2 px-4 py-3 bg-white border border-brand-100 rounded-2xl active:scale-95 transition-all whitespace-nowrap">
                   <i className="ph-fill ph-check-circle text-brand-500"></i>
                   <span className="text-sm font-bold text-brand-900 capitalize">{meal}</span>
@@ -738,6 +763,28 @@
               ))}
             </div>
           )}
+
+          {/* ---- Past days (yesterday, 2 days ago) ---- */}
+          {pastDays.map(({ date, meals }) => (
+            <div key={date} className="mb-4">
+              <p className="text-[10px] font-black uppercase text-neutral tracking-widest mb-2">
+                {date === pastDayStrs[0] ? 'Yesterday' : '2 days ago'}
+              </p>
+              <div className="flex gap-2 overflow-x-auto no-scrollbar">
+                {meals.map(meal => {
+                  const logged = mealHasServings(date, meal);
+                  return (
+                    <button key={meal} onClick={() => setCheckIn({ meal, date })}
+                      className="flex items-center gap-2 px-4 py-3 bg-white border border-slate-200 rounded-2xl active:scale-95 transition-all whitespace-nowrap">
+                      <i className={logged ? 'ph-fill ph-check-circle text-brand-500' : 'ph ph-circle text-slate-300'}></i>
+                      <span className="text-sm font-bold text-brand-700 capitalize">{meal}</span>
+                      <i className="ph ph-pencil-simple text-neutral text-xs"></i>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
 
           {/* ---- SECTION 2: Planning nudge (tomorrow's gaps) ---- */}
           {unplannedTomorrow.length > 0 && (
@@ -831,7 +878,7 @@
 
           {/* Modals */}
           {restaurantMode && <DiscoveryModal dispatch={dispatch} onClose={() => setRestaurantMode(false)} activeChildId={activeChildId} children={kids} settings={state.settings} />}
-          {checkInMeal && <MealCheckInModal meal={checkInMeal} plans={plans} foods={foods} servings={servings} dispatch={dispatch} onClose={() => setCheckInMeal(null)} activeChildId={activeChildId} children={kids} settings={state.settings} />}
+          {checkIn && <MealCheckInModal meal={checkIn.meal} date={checkIn.date} plans={plans} foods={foods} servings={servings} dispatch={dispatch} onClose={() => setCheckIn(null)} activeChildId={activeChildId} children={kids} settings={state.settings} />}
           {showData && <DataModal state={state} dispatch={dispatch} onClose={() => setShowData(false)} />}
           {showTutorial && <TutorialModal onClose={() => setShowTutorial(false)} />}
         </div>
@@ -1998,8 +2045,8 @@
     // MealCheckInModal: Per-meal check-in flow. When multiple children have the
     // same meal, shows all children together for fast side-by-side logging.
     // When only one child (or independent meals), shows the classic single-child flow.
-    function MealCheckInModal({ meal, plans, foods, servings, dispatch, onClose, activeChildId, children: kids, settings }) {
-      const tStr = getTodayStr();
+    function MealCheckInModal({ meal, date, plans, foods, servings, dispatch, onClose, activeChildId, children: kids, settings }) {
+      const tStr = date;
 
       // Determine which children need check-in for this meal
       // In edit mode, include children who already have servings
@@ -2099,7 +2146,7 @@
           <div className="p-8">
             <h2 className="text-2xl font-black text-brand-900 mb-1 capitalize">How was {meal}?</h2>
             <p className="text-[10px] font-black text-neutral uppercase tracking-widest mb-6">
-              {loggedCount} of {totalNeeded} logged
+              {tStr !== getTodayStr() && `${tStr} · `}{loggedCount} of {totalNeeded} logged
             </p>
 
             {multiMode ? (
