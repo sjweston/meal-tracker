@@ -2040,6 +2040,16 @@
         return initial;
       });
 
+      // Track stock changes per food: pre-populate with current low/out state
+      const [stockChanges, setStockChanges] = useState(() => {
+        const initial = {};
+        allFoodIds.forEach(id => {
+          const f = foods.find(f => f.id === id);
+          if (f?.stock === 'low' || f?.stock === 'out') initial[id] = f.stock;
+        });
+        return initial;
+      });
+
       // Count how many entries we need total
       const totalNeeded = useMemo(() => {
         let count = 0;
@@ -2057,7 +2067,14 @@
         setSelections(prev => ({ ...prev, [`${childId}-${foodId}`]: eaten }));
       };
 
-      // Save all selections as serving records
+      const handleStockToggle = (foodId, stockValue) => {
+        setStockChanges(prev => ({
+          ...prev,
+          [foodId]: prev[foodId] === stockValue ? 'in' : stockValue,
+        }));
+      };
+
+      // Save all selections as serving records, plus any stock changes
       const handleSave = () => {
         const entries = Object.entries(selections).map(([key, eaten]) => {
           const [childId, foodId] = key.split('-');
@@ -2066,6 +2083,14 @@
         if (entries.length > 0) {
           dispatch({ type: 'LOG_SERVINGS_BATCH', entries });
         }
+        allFoodIds.forEach(fid => {
+          const food = foods.find(f => f.id === fid);
+          if (!food) return;
+          const newStock = stockChanges[fid] ?? 'in';
+          if (newStock !== food.stock) {
+            dispatch({ type: 'UPDATE_FOOD', id: fid, updates: { stock: newStock } });
+          }
+        });
         onClose();
       };
 
@@ -2113,6 +2138,15 @@
                         );
                       })}
                     </div>
+                    <div className="mt-3 pt-3 border-t border-brand-100 flex items-center gap-2">
+                      <span className="text-[9px] font-black uppercase text-neutral tracking-widest">Stock</span>
+                      {[{id:'low',label:'Low',on:'bg-amber-100 border-amber-400 text-amber-700'},{id:'out',label:'Out',on:'bg-red-100 border-red-400 text-red-700'}].map(s => (
+                        <button key={s.id} onClick={() => handleStockToggle(f.id, s.id)}
+                          className={`px-3 py-1 rounded-lg border text-[10px] font-black uppercase transition-all active:scale-95 ${stockChanges[f.id] === s.id ? s.on : 'bg-white border-slate-200 text-slate-400'}`}>
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -2145,6 +2179,15 @@
                               </button>
                             );
                           })}
+                        </div>
+                        <div className="mt-3 pt-3 border-t border-brand-100 flex items-center gap-2">
+                          <span className="text-[9px] font-black uppercase text-neutral tracking-widest">Stock</span>
+                          {[{id:'low',label:'Low',on:'bg-amber-100 border-amber-400 text-amber-700'},{id:'out',label:'Out',on:'bg-red-100 border-red-400 text-red-700'}].map(s => (
+                            <button key={s.id} onClick={() => handleStockToggle(f.id, s.id)}
+                              className={`px-3 py-1 rounded-lg border text-[10px] font-black uppercase transition-all active:scale-95 ${stockChanges[f.id] === s.id ? s.on : 'bg-white border-slate-200 text-slate-400'}`}>
+                              {s.label}
+                            </button>
+                          ))}
                         </div>
                       </div>
                     );
