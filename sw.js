@@ -1,5 +1,5 @@
 // Cache version — bump this when deploying changes so the SW picks up new files
-const CACHE_VERSION = 'meal-tracker-v18.8';
+const CACHE_VERSION = 'meal-tracker-v18.9';
 
 // App shell files to pre-cache on install.
 // Uses absolute paths matching GitHub Pages deployment at /meal-tracker/
