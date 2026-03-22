@@ -536,13 +536,19 @@
     };
 
     // Per-child preference badges — shows each child's preference icon for a food
-    const ChildPreferenceBadges = ({ foodId, children, servings }) => {
+    // Accepts optional prefMaps (Map<childId, Map<foodId, pref>>) to avoid recomputation
+    const ChildPreferenceBadges = React.memo(({ foodId, children, servings, prefMaps }) => {
       if (!children || children.length < 2) return null;
       return (
         <div className="flex gap-1 items-center">
           {children.map(child => {
-            const cServings = childServings(servings, child.id);
-            const { ratingId } = getPreferenceScore(foodId, cServings);
+            let ratingId;
+            if (prefMaps && prefMaps[child.id]) {
+              ratingId = prefMaps[child.id][foodId]?.ratingId || null;
+            } else {
+              const cServings = childServings(servings, child.id);
+              ratingId = getPreferenceScore(foodId, cServings).ratingId;
+            }
             const r = RATINGS.find(rt => rt.id === ratingId);
             if (!r) return null;
             return (
@@ -554,9 +560,47 @@
           })}
         </div>
       );
-    };
+    });
 
     const calculateExposures = (foodId, plans) => plans.filter(p => p.date <= getTodayStr() && p.foodIds.includes(foodId)).length;
+
+    // Batch-compute exposure counts for all foods at once — O(plans) instead of O(foods × plans)
+    const buildExposureMap = (plans) => {
+      const today = getTodayStr();
+      const map = {};
+      for (const p of plans) {
+        if (p.date <= today) {
+          for (const fid of p.foodIds) {
+            map[fid] = (map[fid] || 0) + 1;
+          }
+        }
+      }
+      return map;
+    };
+
+    // Batch-compute preference scores for all foods at once — O(servings) instead of O(foods × servings)
+    const buildPreferenceMap = (servings) => {
+      const sixMonthsAgo = new Date();
+      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+      const cutoff = sixMonthsAgo.toLocaleDateString('en-CA');
+      const pointMap = { none: 0, some: 5, all: 10 };
+      // Group servings by foodId
+      const buckets = {};
+      for (const s of (servings || [])) {
+        if (s.date >= cutoff) {
+          if (!buckets[s.foodId]) buckets[s.foodId] = [];
+          buckets[s.foodId].push(pointMap[s.eaten] ?? 0);
+        }
+      }
+      // Compute score per food
+      const map = {};
+      for (const [foodId, points] of Object.entries(buckets)) {
+        const score = points.reduce((a, b) => a + b, 0) / points.length;
+        const r = RATINGS.find(rt => score >= rt.min);
+        map[foodId] = { score, ratingId: r?.id || null, rating: r || null };
+      }
+      return map;
+    };
 
     // Child selector bar — shown when 2+ children exist.
     // Renders horizontal pills for switching the active child.
@@ -1068,6 +1112,7 @@
 
     function ListView({ foods, plans, servings, title, selectionIds, setSelectionIds, onEdit, dispatch, showBatch, allFoods, children: kids, activeChildId }) {
       const [search, setSearch] = useState('');
+      const [debouncedSearch, setDebouncedSearch] = useState('');
       const [batchMode, setBatchMode] = useState(false);
       const [input, setInput] = useState('');
       const [filterCat, setFilterCat] = useState(null);
@@ -1075,29 +1120,60 @@
       const [sortBy, setSortBy] = useState('name'); // 'name' | 'recent' | 'times'
       const [showFilters, setShowFilters] = useState(false);
       const inSelect = selectionIds.length > 0;
+      const searchTimer = useRef(null);
 
-      // For per-child preference display
-      const myServings = childServings(servings, activeChildId);
-      const myPlans = childPlans(plans, activeChildId);
+      // Debounce search input — only recompute filtered list after 150ms of no typing
+      const handleSearchChange = useCallback((e) => {
+        const val = e.target.value;
+        setSearch(val);
+        clearTimeout(searchTimer.current);
+        searchTimer.current = setTimeout(() => setDebouncedSearch(val), 150);
+      }, []);
+
+      // Memoize per-child filtered arrays so they don't recreate on every render
+      const myServings = useMemo(() => childServings(servings, activeChildId), [servings, activeChildId]);
+      const myPlans = useMemo(() => childPlans(plans, activeChildId), [plans, activeChildId]);
+
+      // Pre-compute lookup maps once instead of per-food
+      const exposureMap = useMemo(() => buildExposureMap(myPlans), [myPlans]);
+      const prefMap = useMemo(() => buildPreferenceMap(myServings), [myServings]);
+
+      // Pre-compute per-child preference maps for ChildPreferenceBadges
+      const childPrefMaps = useMemo(() => {
+        if (!kids || kids.length < 2) return null;
+        const maps = {};
+        for (const child of kids) {
+          const cs = childServings(servings, child.id);
+          maps[child.id] = buildPreferenceMap(cs);
+        }
+        return maps;
+      }, [kids, servings]);
+
+      // Pre-compute last-served date map for 'recent' sort
+      const lastServedMap = useMemo(() => {
+        if (sortBy !== 'recent') return null;
+        const map = {};
+        for (const s of myServings) {
+          if (!map[s.foodId] || s.date > map[s.foodId]) map[s.foodId] = s.date;
+        }
+        return map;
+      }, [myServings, sortBy]);
 
       const filtered = useMemo(() => {
-        let list = foods.filter(f => f.name.toLowerCase().includes(search.toLowerCase()));
+        const lowerSearch = debouncedSearch.toLowerCase();
+        let list = lowerSearch ? foods.filter(f => f.name.toLowerCase().includes(lowerSearch)) : foods;
         if (filterCat) list = list.filter(f => f.categories?.includes(filterCat));
-        if (filterPref) list = list.filter(f => getPreferenceScore(f.id, myServings).ratingId === filterPref);
+        if (filterPref) list = list.filter(f => (prefMap[f.id]?.ratingId || null) === filterPref);
 
         if (sortBy === 'recent') {
-          list = [...list].sort((a, b) => {
-            const aLast = myServings.filter(s => s.foodId === a.id).sort((x, y) => y.date.localeCompare(x.date))[0]?.date || '';
-            const bLast = myServings.filter(s => s.foodId === b.id).sort((x, y) => y.date.localeCompare(x.date))[0]?.date || '';
-            return bLast.localeCompare(aLast);
-          });
+          list = [...list].sort((a, b) => (lastServedMap[b.id] || '').localeCompare(lastServedMap[a.id] || ''));
         } else if (sortBy === 'times') {
-          list = [...list].sort((a, b) => calculateExposures(b.id, myPlans) - calculateExposures(a.id, myPlans));
+          list = [...list].sort((a, b) => (exposureMap[b.id] || 0) - (exposureMap[a.id] || 0));
         } else {
           list = [...list].sort((a, b) => a.name.localeCompare(b.name));
         }
         return list;
-      }, [foods, search, filterCat, filterPref, sortBy, myServings, myPlans]);
+      }, [foods, debouncedSearch, filterCat, filterPref, sortBy, prefMap, exposureMap, lastServedMap]);
 
       const SORT_OPTIONS = [
         { id: 'name', label: 'A-Z', icon: 'ph-sort-ascending' },
@@ -1117,7 +1193,7 @@
 
           {/* Search + filter toggle */}
           <div className="flex gap-2 mb-2">
-            <input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="flex-1 p-3 rounded-2xl bg-white shadow-sm border-none font-bold text-sm outline-none" />
+            <input type="text" placeholder="Search..." value={search} onChange={handleSearchChange} className="flex-1 p-3 rounded-2xl bg-white shadow-sm border-none font-bold text-sm outline-none" />
             <button onClick={() => setShowFilters(v => !v)}
               className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-90 ${showFilters || filterCat || filterPref ? 'bg-brand-500 text-white shadow-lg' : 'bg-white text-neutral shadow-sm'}`}>
               <i className="ph-bold ph-funnel text-sm"></i>
@@ -1193,14 +1269,14 @@
                   <div>
                     <p className="font-bold text-sm">{f.source === 'outside' && '🍽️ '}{f.name}</p>
                     <div className="flex gap-1 mt-0.5">
-                      <p className="text-[8px] uppercase font-black text-neutral opacity-50 tracking-tighter">Tries: {calculateExposures(f.id, myPlans)}</p>
+                      <p className="text-[8px] uppercase font-black text-neutral opacity-50 tracking-tighter">Tries: {exposureMap[f.id] || 0}</p>
                       {f.stock === 'low' && <span className="text-[8px] font-black text-amber-500 ml-1">Low</span>}
                     </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <ChildPreferenceBadges foodId={f.id} children={kids} servings={servings} />
-                  {(!kids || kids.length < 2) && <RatingIcon foodId={f.id} servings={myServings} />}
+                  <ChildPreferenceBadges foodId={f.id} children={kids} servings={servings} prefMaps={childPrefMaps} />
+                  {(!kids || kids.length < 2) && <RatingIcon foodId={f.id} ratingId={prefMap[f.id]?.ratingId} />}
                 </div>
               </div>
             );
