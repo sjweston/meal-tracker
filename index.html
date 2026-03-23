@@ -243,7 +243,12 @@
           let updatedFoods = [...state.foods];
           action.names.forEach(n => {
             const clean = n.trim();
-            if (!clean || updatedFoods.some(f => f.name.toLowerCase() === clean.toLowerCase())) return;
+            if (!clean) return;
+            const existing = updatedFoods.findIndex(f => f.name.toLowerCase() === clean.toLowerCase());
+            if (existing !== -1) {
+              updatedFoods[existing] = { ...updatedFoods[existing], stock: 'in' };
+              return;
+            }
             const mem = state.foodMemory?.[clean.toLowerCase()] || {};
             updatedFoods.push({
               id: generateId(), name: clean,
