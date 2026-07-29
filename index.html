@@ -2589,5 +2589,6 @@
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
   </script>
+  <script>if ('serviceWorker' in navigator) { navigator.serviceWorker.register('./sw.js'); }</script>
 </body>
 </html>
